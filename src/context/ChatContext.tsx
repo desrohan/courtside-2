@@ -48,11 +48,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!session || !currentOrg) return;
 
+    // Skip re-connecting if already connected to this org
+    if (clientRef.current?.isConnected && currentOrg.orgId === chatUserId?.split('::')[0]) return;
+
     let cancelled = false;
 
     async function init() {
       try {
-        // Fetch chat session token from our API route
+        // Fetch chat session token from our API route.
+        // Snapshot the token now — if it refreshes mid-flight we still use the
+        // token we got back from /api/chat/token (not the new access token).
         const accessToken = session!.access_token;
         const res = await fetch('/api/chat/token', {
           method: 'POST',
@@ -63,10 +68,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({ orgId: currentOrg!.orgId }),
         });
 
-        if (!res.ok || cancelled) {
-          console.warn('[Chat] Token fetch failed:', res.status, await res.text().catch(() => ''));
+        if (!res.ok) {
+          console.warn('[Chat] Token fetch failed:', res.status);
           return;
         }
+        // Only bail after we've successfully read the response
+        if (cancelled) return;
 
         const { token, chat_user_id } = await res.json();
 
@@ -160,7 +167,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setMessages({});
       setTypingUsers({});
     };
-  }, [session?.access_token, currentOrg?.orgId]);
+  // Use user id (stable) + orgId as deps — access_token changes on every
+  // token refresh which would tear down the WS connection unnecessarily.
+  }, [session?.user?.id, currentOrg?.orgId]);
 
   async function fetchChannels(client: SessionClient) {
     setChannelsLoading(true);

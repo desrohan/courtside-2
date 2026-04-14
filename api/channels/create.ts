@@ -56,12 +56,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Namespace all user ids for this org
   const namespacedUserIds = userIds.map(uid => `${orgId}::${uid}`);
 
+  // For direct channels, store both users' names in `data` so the client
+  // can display them without a round-trip listMembers call.
+  let channelData: Record<string, unknown> | undefined;
+  if (type === 'direct') {
+    try {
+      const memberIds = [user.id, ...userIds.filter(uid => uid !== user.id)];
+      const nameResults = await Promise.all(
+        memberIds.map(uid => supabaseAdmin.auth.admin.getUserById(uid))
+      );
+      const memberNames: Record<string, string> = {};
+      nameResults.forEach(({ data: d }, i) => {
+        if (d?.user) {
+          const u = d.user;
+          const n = u.user_metadata?.full_name ?? u.email ?? u.id;
+          memberNames[memberIds[i]] = n;
+        }
+      });
+      channelData = { memberNames };
+    } catch {
+      // non-fatal — channel still created without names
+    }
+  }
+
   try {
     const channel = await platform.createChannel({
       type,
       name: name ?? undefined,
       user_ids: namespacedUserIds,
       is_distinct: type === 'direct',
+      data: channelData,
     });
 
     return res.status(200).json(channel);
