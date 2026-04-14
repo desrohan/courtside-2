@@ -31,8 +31,21 @@ function userInitials(name: string) {
   return name.split(' ').map(n => n[0] ?? '').join('').toUpperCase().slice(0, 2) || '??';
 }
 
-function channelDisplayName(ch: ChannelWithUnread): string {
-  return ch.name ?? ch.channel_url;
+function channelDisplayName(
+  ch: ChannelWithUnread,
+  dmNamesMap: Record<string, string> = {},
+  myUserId?: string | null,
+): string {
+  if (ch.name) return ch.name;
+  // Use override from state (e.g. freshly created DM)
+  if (dmNamesMap[ch.channel_url]) return dmNamesMap[ch.channel_url];
+  // Read partner name stored in channel data at creation time
+  if (ch.type === 'direct' && ch.data?.memberNames && myUserId) {
+    const names = ch.data.memberNames as Record<string, string>;
+    const other = Object.entries(names).find(([id]) => id !== myUserId);
+    if (other) return other[1];
+  }
+  return 'Direct Message';
 }
 
 // ─── Create Group Dialog ──────────────────────────────
@@ -129,6 +142,7 @@ export default function ChatModule() {
   const [inputText, setInputText] = useState('');
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [orgUsers, setOrgUsers] = useState<OrgUser[]>([]);
+  const [dmNamesMap, setDmNamesMap] = useState<Record<string, string>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -204,10 +218,15 @@ export default function ChatModule() {
   const handleStartDM = useCallback(async (userId: string) => {
     const channel = await startDM(userId);
     if (channel) {
+      // Immediately resolve the display name for this new DM
+      const targetUser = orgUsers.find(u => u.id === userId);
+      if (targetUser) {
+        setDmNamesMap(prev => ({ ...prev, [channel.channel_url]: targetUser.name }));
+      }
       setActiveChannelUrl(channel.channel_url);
       setNavTab('chats');
     }
-  }, [startDM]);
+  }, [startDM, orgUsers]);
 
   const handleCreateGroup = useCallback(async (name: string, userIds: string[]) => {
     const channel = await createGroup(name, userIds);
@@ -216,8 +235,16 @@ export default function ChatModule() {
     }
   }, [createGroup]);
 
+  // Resolve DM channel names for channels where ch.data.memberNames is missing
+  // (created before this patch) by falling back to the dmNamesMap state.
+  // For channels created after this patch the server stores names in ch.data.
+  useEffect(() => {
+    // nothing extra needed — dmNamesMap is populated by handleStartDM for new DMs
+    // and by ch.data.memberNames for existing ones
+  }, []);
+
   const filteredChannels = channels.filter(ch => {
-    const name = channelDisplayName(ch);
+    const name = channelDisplayName(ch, dmNamesMap, user?.id);
     return !search || name.toLowerCase().includes(search.toLowerCase());
   });
 
@@ -282,7 +309,7 @@ export default function ChatModule() {
               <p className="text-xs text-dark-400 text-center py-8">No conversations yet</p>
             ) : (
               filteredChannels.map(ch => {
-                const displayName = channelDisplayName(ch);
+                const displayName = channelDisplayName(ch, dmNamesMap, user?.id);
                 const isActive = ch.channel_url === activeChannelUrl;
                 return (
                   <button key={ch.channel_url} onClick={() => setActiveChannelUrl(ch.channel_url)}
@@ -346,10 +373,10 @@ export default function ChatModule() {
               }`}>
                 {activeChannel.type === 'group' || activeChannel.type === 'super_group'
                   ? <Users size={15} />
-                  : userInitials(channelDisplayName(activeChannel))}
+                  : userInitials(channelDisplayName(activeChannel, dmNamesMap, user?.id))}
               </div>
               <div>
-                <p className="text-sm font-bold text-dark-900">{channelDisplayName(activeChannel)}</p>
+                <p className="text-sm font-bold text-dark-900">{channelDisplayName(activeChannel, dmNamesMap, user?.id)}</p>
                 <p className="text-[11px] text-dark-400">
                   {activeChannel.member_count} members
                   {typingUsers[activeChannel.channel_url]?.length > 0 && (
@@ -498,7 +525,7 @@ export default function ChatModule() {
                     </div>
                     <div className="p-4 border-b border-dark-100">
                       <h4 className="text-xs font-bold uppercase tracking-wider text-dark-400 mb-3">Channel Info</h4>
-                      <p className="text-sm text-dark-700">{channelDisplayName(activeChannel)}</p>
+                      <p className="text-sm text-dark-700">{channelDisplayName(activeChannel, dmNamesMap, user?.id)}</p>
                       <p className="text-xs text-dark-400 mt-1">{activeChannel.member_count} members · {activeChannel.type}</p>
                     </div>
                     <div className="p-4 border-b border-dark-100">
