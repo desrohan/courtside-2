@@ -21,10 +21,21 @@ import OnboardingLanding from './pages/onboarding/OnboardingLanding';
 import CreateOrgPage from './pages/onboarding/CreateOrgPage';
 import JoinOrgPage from './pages/onboarding/JoinOrgPage';
 
+function FullPageSpinner() {
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-white">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 rounded-full border-2 border-court-500 border-t-transparent animate-spin" />
+        <p className="text-sm text-dark-400 font-medium">Loading…</p>
+      </div>
+    </div>
+  );
+}
+
 // Route guard: redirects unauthenticated users to /auth/login
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) return <FullPageSpinner />;
   if (!user) return <Navigate to="/auth/login" replace />;
   return <>{children}</>;
 }
@@ -32,7 +43,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 // Route guard: redirects users with no org to /onboarding, with 1+ orgs into the app
 function RequireOrg({ children }: { children: React.ReactNode }) {
   const { user, loading, memberships, currentOrg } = useAuth();
-  if (loading) return null;
+  if (loading) return <FullPageSpinner />;
   if (!user) return <Navigate to="/auth/login" replace />;
   if (memberships.length === 0) return <Navigate to="/onboarding" replace />;
   if (!currentOrg && memberships.length > 0) return <Navigate to="/o" replace />;
@@ -42,7 +53,7 @@ function RequireOrg({ children }: { children: React.ReactNode }) {
 function AppRoutes() {
   const { user, loading, memberships, currentOrg } = useAuth();
 
-  if (loading) return null;
+  if (loading) return <FullPageSpinner />;
 
   return (
     <AnimatePresence mode="wait">

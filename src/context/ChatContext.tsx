@@ -46,19 +46,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // ── Chat token + connect ─────────────────────────────
   useEffect(() => {
-    if (!session || !currentOrg) return;
+    if (!session || !currentOrg) {
+      console.log('[Chat] Skipping init — session:', !!session, 'currentOrg:', !!currentOrg);
+      return;
+    }
 
     // Skip re-connecting if already connected to this org
-    if (clientRef.current?.isConnected && currentOrg.orgId === chatUserId?.split('::')[0]) return;
+    if (clientRef.current?.isConnected && currentOrg.orgId === chatUserId?.split('::')[0]) {
+      console.log('[Chat] Already connected to org', currentOrg.orgId);
+      return;
+    }
 
     let cancelled = false;
 
     async function init() {
       try {
+        console.log('[Chat] Starting init for org', currentOrg!.orgId);
         // Fetch chat session token from our API route.
-        // Snapshot the token now — if it refreshes mid-flight we still use the
-        // token we got back from /api/chat/token (not the new access token).
         const accessToken = session!.access_token;
+        console.log('[Chat] Fetching token from /api/chat/token…');
         const res = await fetch('/api/chat/token', {
           method: 'POST',
           headers: {
@@ -69,13 +75,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
 
         if (!res.ok) {
-          console.warn('[Chat] Token fetch failed:', res.status);
+          const errText = await res.text().catch(() => '');
+          console.error('[Chat] Token fetch failed:', res.status, errText);
           return;
         }
         // Only bail after we've successfully read the response
         if (cancelled) return;
 
         const { token, chat_user_id } = await res.json();
+        console.log('[Chat] Got session token for chat user:', chat_user_id);
 
         const client = new SessionClient({
           baseUrl: import.meta.env.CHAT_API_URL as string,
@@ -87,7 +95,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setChatUserId(chat_user_id);
 
         // Connect WebSocket
+        console.log('[Chat] Connecting WebSocket…');
         await client.connect();
+        console.log('[Chat] WebSocket connected ✓');
 
       // Subscribe to real-time events
       client
@@ -150,7 +160,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           await fetchChannels(client);
         });
 
+      console.log('[Chat] Fetching channels…');
       await fetchChannels(client);
+      console.log('[Chat] Init complete ✓');
       } catch (err) {
         if (!cancelled) console.error('[Chat] Init failed:', err);
       }
@@ -174,8 +186,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   async function fetchChannels(client: SessionClient) {
     setChannelsLoading(true);
     try {
+      console.log('[Chat] fetchChannels: calling getMyChannels()…');
       const { data } = await client.getMyChannels();
+      console.log('[Chat] fetchChannels: got', data.length, 'channels');
       setChannels(data);
+    } catch (err) {
+      console.error('[Chat] fetchChannels failed:', err);
     } finally {
       setChannelsLoading(false);
     }
@@ -198,15 +214,58 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const sendMessage = useCallback(async (channelUrl: string, body: string, parentMessageId?: string) => {
-    if (!clientRef.current) return;
-    const ack = await clientRef.current.sendMessageRealtime(channelUrl, body, {
-      parentMessageId,
-    });
-    if (!ack.ok) console.error('[sendMessage] ack error:', ack.error);
+    if (!clientRef.current) {
+      console.error('[Chat] sendMessage: no client connected');
+      return;
+    }
+    console.log('[Chat] Sending message to', channelUrl, '— body length:', body.length);
+    try {
+      const ack = await clientRef.current.sendMessageRealtime(channelUrl, body, {
+        parentMessageId,
+      });
+      console.log('[Chat] sendMessageRealtime ack:', ack);
+      if (!ack.ok) {
+        console.error('[Chat] sendMessage ack error:', ack.error);
+        // Fallback: try REST send
+        console.log('[Chat] Trying REST fallback…');
+        const msg = await clientRef.current.sendMessage(channelUrl, {
+          body,
+          type: 'user',
+        });
+        console.log('[Chat] REST send succeeded:', msg.id);
+        // Add message to local state
+        setMessages(prev => {
+          const existing = prev[channelUrl] ?? [];
+          if (existing.some(m => m.id === msg.id)) return prev;
+          return { ...prev, [channelUrl]: [...existing, msg] };
+        });
+      }
+    } catch (err) {
+      console.error('[Chat] sendMessage failed:', err);
+      // Fallback: try REST send
+      try {
+        console.log('[Chat] Trying REST fallback after error…');
+        const msg = await clientRef.current!.sendMessage(channelUrl, {
+          body,
+          type: 'user',
+        });
+        console.log('[Chat] REST fallback succeeded:', msg.id);
+        setMessages(prev => {
+          const existing = prev[channelUrl] ?? [];
+          if (existing.some(m => m.id === msg.id)) return prev;
+          return { ...prev, [channelUrl]: [...existing, msg] };
+        });
+      } catch (restErr) {
+        console.error('[Chat] REST fallback also failed:', restErr);
+      }
+    }
   }, []);
 
   const createGroup = useCallback(async (name: string, supabaseUserIds: string[]): Promise<ChannelWithUnread | null> => {
     if (!session || !currentOrg) return null;
+
+    // Always include the creator in the group
+    const allUserIds = Array.from(new Set([session.user.id, ...supabaseUserIds]));
 
     const res = await fetch('/api/channels/create', {
       method: 'POST',
@@ -218,7 +277,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         orgId: currentOrg.orgId,
         type: 'group',
         name,
-        userIds: supabaseUserIds,
+        userIds: allUserIds,
       }),
     });
 
