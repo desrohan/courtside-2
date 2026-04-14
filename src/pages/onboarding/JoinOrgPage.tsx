@@ -38,9 +38,13 @@ export default function JoinOrgPage() {
   }
 
   async function handleJoin() {
-    if (!user) return;
     const inviteCode = code.join('');
     if (inviteCode.length !== 8) return;
+
+    if (!user) {
+      setError('You must be signed in to join an organization.');
+      return;
+    }
 
     setLoading(true);
     setError('');
@@ -67,7 +71,6 @@ export default function JoinOrgPage() {
       .maybeSingle();
 
     if (existing) {
-      // Already a member — just navigate in
       setCurrentOrg({ orgId: org.id, orgName: org.name, orgSlug: org.slug, sport: org.sport, role: 'member' });
       navigate(`/o/${org.id}`, { replace: true });
       return;
@@ -140,7 +143,7 @@ export default function JoinOrgPage() {
             disabled={!codeComplete || loading}
             className="w-full h-11 rounded-xl bg-court-500 text-white text-sm font-semibold hover:bg-court-600 disabled:opacity-40 transition-colors"
           >
-            {loading ? 'Joining…' : 'Join Organization'}
+            {loading ? 'Joining…' : !user ? 'Loading…' : 'Join Organization'}
           </button>
         </motion.div>
       </div>
