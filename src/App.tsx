@@ -1,5 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ChatProvider } from './context/ChatContext';
 import SelectOrganization from './pages/SelectOrganization';
 import OrgLayout from './layouts/OrgLayout';
 import Dashboard from './pages/Dashboard';
@@ -13,15 +15,75 @@ import TournamentModule from './pages/TournamentModule';
 import SettingsModule from './pages/SettingsModule';
 import PlaceholderPage from './pages/PlaceholderPage';
 import AthleteSignup from './pages/AthleteSignup';
+import LoginPage from './pages/auth/LoginPage';
+import AuthCallbackPage from './pages/auth/AuthCallbackPage';
+import OnboardingLanding from './pages/onboarding/OnboardingLanding';
+import CreateOrgPage from './pages/onboarding/CreateOrgPage';
+import JoinOrgPage from './pages/onboarding/JoinOrgPage';
 
-export default function App() {
+// Route guard: redirects unauthenticated users to /auth/login
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/auth/login" replace />;
+  return <>{children}</>;
+}
+
+// Route guard: redirects users with no org to /onboarding, with 1+ orgs into the app
+function RequireOrg({ children }: { children: React.ReactNode }) {
+  const { user, loading, memberships, currentOrg } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/auth/login" replace />;
+  if (memberships.length === 0) return <Navigate to="/onboarding" replace />;
+  if (!currentOrg && memberships.length > 0) return <Navigate to="/o" replace />;
+  return <>{children}</>;
+}
+
+function AppRoutes() {
+  const { user, loading, memberships, currentOrg } = useAuth();
+
+  if (loading) return null;
+
   return (
     <AnimatePresence mode="wait">
       <Routes>
-        <Route path="/" element={<Navigate to="/o" replace />} />
+        {/* Public */}
         <Route path="/register/:orgSlug" element={<AthleteSignup />} />
-        <Route path="/o" element={<SelectOrganization />} />
-        <Route path="/o/:organizationId" element={<OrgLayout />}>
+        <Route path="/auth/login" element={
+          user ? <Navigate to="/o" replace /> : <LoginPage />
+        } />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
+
+        {/* Onboarding (auth required, no org yet) */}
+        <Route path="/onboarding" element={
+          <RequireAuth><OnboardingLanding /></RequireAuth>
+        } />
+        <Route path="/onboarding/create" element={
+          <RequireAuth><CreateOrgPage /></RequireAuth>
+        } />
+        <Route path="/onboarding/join" element={
+          <RequireAuth><JoinOrgPage /></RequireAuth>
+        } />
+
+        {/* Org selector (multi-org users or post-login redirect) */}
+        <Route path="/o" element={
+          <RequireAuth>
+            {memberships.length === 0
+              ? <Navigate to="/onboarding" replace />
+              : memberships.length === 1
+                ? <Navigate to={`/o/${memberships[0].orgId}`} replace />
+                : <SelectOrganization />}
+          </RequireAuth>
+        } />
+
+        {/* Main app */}
+        <Route path="/o/:organizationId" element={
+          <RequireOrg>
+            <ChatProvider>
+              <OrgLayout />
+            </ChatProvider>
+          </RequireOrg>
+        }>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="schedule/calendar" element={<Scheduler />} />
@@ -36,7 +98,18 @@ export default function App() {
           <Route path="settings/*" element={<SettingsModule />} />
           <Route path="helpguide/*" element={<PlaceholderPage title="Help Guide" icon="help-circle" />} />
         </Route>
+
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to={user ? '/o' : '/auth/login'} replace />} />
       </Routes>
     </AnimatePresence>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
   );
 }
