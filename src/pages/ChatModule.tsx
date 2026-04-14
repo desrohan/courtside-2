@@ -9,7 +9,6 @@ import {
 import type { ChannelWithUnread, Message } from '@courtside/chat-sdk';
 import { useChat } from '@/context/ChatContext';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/lib/supabase';
 import { format, isToday, isYesterday } from 'date-fns';
 
 type NavTab = 'chats' | 'users';
@@ -120,7 +119,7 @@ export default function ChatModule() {
     startTyping, stopTyping,
     markRead,
   } = useChat();
-  const { user, currentOrg } = useAuth();
+  const { user, currentOrg, session } = useAuth();
 
   const [navTab, setNavTab] = useState<NavTab>('chats');
   const [search, setSearch] = useState('');
@@ -159,27 +158,26 @@ export default function ChatModule() {
 
   // Fetch org members for the Users tab and group creation
   useEffect(() => {
-    if (!currentOrg) return;
+    if (!currentOrg || !session) return;
     async function fetchOrgUsers() {
-      const { data, error } = await supabase
-        .from('organization_members')
-        .select('user_id, role')
-        .eq('org_id', currentOrg!.orgId);
-
-      if (error || !data) return;
-
-      const users: OrgUser[] = data
-        .filter((row: any) => row.user_id !== user?.id)
-        .map((row: any) => ({
-          id: row.user_id,
-          name: row.user_id.slice(0, 8),
-          avatar: '??',
-          email: '',
-        }));
-      setOrgUsers(users);
+      const res = await fetch(`/api/org/members?orgId=${currentOrg!.orgId}`, {
+        headers: { Authorization: `Bearer ${session!.access_token}` },
+      });
+      if (!res.ok) return;
+      const data: Array<{ id: string; name: string; email: string; avatar_url: string | null; role: string }> = await res.json();
+      setOrgUsers(
+        data
+          .filter(u => u.id !== user?.id)
+          .map(u => ({
+            id: u.id,
+            name: u.name,
+            avatar: u.name.split(' ').map((w: string) => w[0] ?? '').join('').toUpperCase().slice(0, 2) || '??',
+            email: u.email,
+          }))
+      );
     }
     fetchOrgUsers();
-  }, [currentOrg, user?.id]);
+  }, [currentOrg, session, user?.id]);
 
   const handleSend = useCallback(() => {
     if (!inputText.trim() || !activeChannelUrl) return;
