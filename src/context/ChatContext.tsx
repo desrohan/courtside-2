@@ -71,9 +71,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const { token, chat_user_id } = await res.json();
 
         const client = new SessionClient({
-          baseUrl: import.meta.env.VITE_CHAT_API_URL as string,
+          baseUrl: import.meta.env.CHAT_API_URL as string,
           sessionToken: token,
-          appId: import.meta.env.VITE_CHAT_APP_ID as string,
+          appId: import.meta.env.CHAT_APP_ID as string,
         });
 
         clientRef.current = client;
