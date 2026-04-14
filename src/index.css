@@ -1,0 +1,148 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ───────────────────────────────────────────────── */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+
+body {
+  @apply bg-dark-50 text-dark-900 antialiased;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+}
+
+/* ── Scrollbar ─────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-dark-200 rounded-full; }
+::-webkit-scrollbar-thumb:hover { @apply bg-dark-300; }
+
+/* ── FullCalendar Overrides ────────────────────────────── */
+.fc {
+  --fc-border-color: #ebedf0;
+  --fc-today-bg-color: rgba(0, 167, 111, 0.04);
+  --fc-event-border-color: transparent;
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: transparent;
+  font-family: 'Inter', sans-serif !important;
+}
+
+.fc .fc-toolbar-title {
+  font-size: 1.25rem !important;
+  font-weight: 700 !important;
+  color: #24272e;
+}
+
+.fc .fc-button {
+  @apply !rounded-lg !border-0 !shadow-none !text-sm !font-medium !px-3 !py-1.5;
+  background: #f5f6f8 !important;
+  color: #545a67 !important;
+  text-transform: capitalize !important;
+}
+
+.fc .fc-button:hover {
+  background: #ebedf0 !important;
+  color: #24272e !important;
+}
+
+.fc .fc-button-active,
+.fc .fc-button.fc-button-active {
+  background: #00A76F !important;
+  color: white !important;
+}
+
+.fc .fc-daygrid-day-number {
+  @apply text-sm font-medium p-2;
+  color: #545a67;
+}
+
+.fc .fc-day-today .fc-daygrid-day-number {
+  @apply bg-court-500 text-white rounded-full w-7 h-7 flex items-center justify-center m-1;
+}
+
+.fc .fc-col-header-cell-cushion {
+  @apply text-xs font-semibold uppercase tracking-wider py-3;
+  color: #878e9e;
+}
+
+.fc .fc-daygrid-event {
+  @apply !rounded-md !px-2 !py-0.5 !text-xs !font-medium !border-0 !cursor-pointer;
+  margin: 1px 4px !important;
+}
+
+.fc .fc-event-main {
+  padding: 2px 4px;
+}
+
+.fc .fc-daygrid-more-link {
+  @apply text-court-500 font-semibold text-xs;
+}
+
+.fc td, .fc th {
+  border-color: #f0f1f3 !important;
+}
+
+.fc .fc-timegrid-slot {
+  height: 48px !important;
+}
+
+.fc .fc-timegrid-slot-label-cushion {
+  @apply text-xs font-medium;
+  color: #878e9e;
+}
+
+.fc .fc-list-event:hover td {
+  background: rgba(0, 167, 111, 0.04) !important;
+}
+
+.fc .fc-list-day-cushion {
+  @apply !bg-dark-50;
+}
+
+/* ── Glass effect ──────────────────────────────────────── */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── Gradient text ─────────────────────────────────────── */
+.gradient-text {
+  background: linear-gradient(135deg, #00A76F, #004B30);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Custom focus ring ─────────────────────────────────── */
+.focus-ring:focus-visible {
+  @apply outline-none ring-2 ring-court-500/30 ring-offset-2;
+}
+
+/* ── Sidebar link ──────────────────────────────────────── */
+.sidebar-link {
+  @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200;
+  color: #6b7280;
+}
+.sidebar-link:hover {
+  @apply bg-dark-50 text-dark-900;
+}
+.sidebar-link.active {
+  @apply bg-court-500/10 text-court-600 font-semibold;
+}
+.sidebar-link.active::before {
+  content: '';
+  @apply absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-court-500 rounded-r-full;
+}
+
+/* ── Stat card shimmer ─────────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, transparent 25%, rgba(255,255,255,0.1) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
