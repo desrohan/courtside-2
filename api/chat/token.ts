@@ -54,12 +54,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const profileUrl = user.user_metadata?.avatar_url ?? undefined;
 
   try {
-    // createUser is idempotent — safe to call on every login
-    await platform.createUser({
-      user_id: chatUserId,
-      nickname,
-      profile_url: profileUrl,
-    });
+    try {
+      await platform.createUser({
+        user_id: chatUserId,
+        nickname,
+        profile_url: profileUrl,
+      });
+    } catch (createErr: any) {
+      // USER_ALREADY_EXISTS is expected on subsequent logins — continue to issue token
+      if (createErr?.code !== 'USER_ALREADY_EXISTS') throw createErr;
+    }
 
     const tokenResponse = await platform.issueSessionToken(chatUserId);
 
