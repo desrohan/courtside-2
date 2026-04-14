@@ -1,8 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { Search, Bell, Settings, ChevronDown, LogOut } from 'lucide-react';
-import { currentUser } from '@/data/users';
+import { Search, Bell, Settings, ChevronDown, LogOut, ArrowLeftRight } from 'lucide-react';
 import { organizations } from '@/data/organizations';
 import { useState, useRef, useEffect } from 'react';
+import { useAuth } from '@/context/AuthContext';
 
 interface TopbarProps {
   sidebarCollapsed: boolean;
@@ -11,9 +11,18 @@ interface TopbarProps {
 export default function Topbar({ sidebarCollapsed }: TopbarProps) {
   const { organizationId } = useParams();
   const navigate = useNavigate();
+  const { user, currentOrg, signOut } = useAuth();
   const org = organizations.find(o => o.id === organizationId);
   const [showProfile, setShowProfile] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
+
+  const displayName = user?.user_metadata?.full_name ?? user?.email ?? '';
+  const email = user?.email ?? '';
+  const firstName = displayName.split(' ')[0] ?? '';
+  const initials = displayName.split(' ').map((w: string) => w[0] ?? '').join('').toUpperCase().slice(0, 2) || '?';
+  const avatarUrl = user?.user_metadata?.avatar_url as string | undefined;
+  const orgName = currentOrg?.orgName ?? org?.name ?? 'Organization';
+  const orgSport = currentOrg?.sport ?? org?.sport ?? '';
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -25,16 +34,27 @@ export default function Topbar({ sidebarCollapsed }: TopbarProps) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
+  const handleSignOut = async () => {
+    setShowProfile(false);
+    await signOut();
+    navigate('/auth/login', { replace: true });
+  };
+
+  const handleSwitchOrg = () => {
+    setShowProfile(false);
+    navigate('/o');
+  };
+
   return (
     <header
       className="fixed top-0 right-0 z-30 h-[72px] bg-white/80 backdrop-blur-xl border-b border-dark-100 flex items-center justify-between px-6 transition-all duration-250"
       style={{ left: sidebarCollapsed ? 72 : 272 }}
     >
-      {/* Left: Org name + breadcrumb */}
+      {/* Left: Org name */}
       <div className="flex items-center gap-4">
         <div>
-          <h1 className="text-base font-bold text-dark-900">{org?.name || 'FC Courtside'}</h1>
-          <p className="text-xs text-dark-400 mt-0.5">{org?.sport} Organization</p>
+          <h1 className="text-base font-bold text-dark-900">{orgName}</h1>
+          <p className="text-xs text-dark-400 mt-0.5">{orgSport ? `${orgSport} ` : ''}Organization</p>
         </div>
       </div>
 
@@ -55,13 +75,11 @@ export default function Topbar({ sidebarCollapsed }: TopbarProps) {
 
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
-        {/* Notifications */}
         <button className="relative p-2.5 rounded-xl hover:bg-dark-50 transition-colors group">
           <Bell size={19} className="text-dark-500 group-hover:text-dark-700" />
           <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full ring-2 ring-white" />
         </button>
 
-        {/* Settings */}
         <button
           onClick={() => navigate(`/o/${organizationId}/settings/account`)}
           className="p-2.5 rounded-xl hover:bg-dark-50 transition-colors group"
@@ -75,30 +93,38 @@ export default function Topbar({ sidebarCollapsed }: TopbarProps) {
             onClick={() => setShowProfile(!showProfile)}
             className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-xl hover:bg-dark-50 transition-colors"
           >
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-court-400 to-court-600 flex items-center justify-center">
-              <span className="text-xs font-bold text-white">{currentUser.avatar}</span>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-court-400 to-court-600 flex items-center justify-center overflow-hidden">
+              {avatarUrl
+                ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                : <span className="text-xs font-bold text-white">{initials}</span>}
             </div>
             <div className="hidden lg:block text-left">
-              <p className="text-sm font-semibold text-dark-800 leading-tight">{currentUser.firstName} {currentUser.lastName}</p>
-              <p className="text-[11px] text-dark-400 leading-tight">{currentUser.designation}</p>
+              <p className="text-sm font-semibold text-dark-800 leading-tight">{displayName || firstName}</p>
+              <p className="text-[11px] text-dark-400 leading-tight">{email}</p>
             </div>
             <ChevronDown size={14} className="text-dark-400 hidden lg:block" />
           </button>
 
-          {/* Dropdown */}
           {showProfile && (
-            <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-2xl shadow-elevated border border-dark-100 p-2 animate-scale-in z-50">
+            <div className="absolute right-0 top-full mt-2 w-60 bg-white rounded-2xl shadow-elevated border border-dark-100 p-2 z-50">
               <div className="px-3 py-2 mb-1">
-                <p className="text-sm font-semibold text-dark-900">{currentUser.firstName} {currentUser.lastName}</p>
-                <p className="text-xs text-dark-400">{currentUser.email}</p>
+                <p className="text-sm font-semibold text-dark-900">{displayName}</p>
+                <p className="text-xs text-dark-400 truncate">{email}</p>
               </div>
               <hr className="border-dark-100 my-1" />
               <button
-                onClick={() => { setShowProfile(false); navigate('/o'); }}
+                onClick={handleSwitchOrg}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dark-600 hover:bg-dark-50 hover:text-dark-900 transition-colors"
               >
-                <LogOut size={16} />
+                <ArrowLeftRight size={16} />
                 Switch Organization
+              </button>
+              <button
+                onClick={handleSignOut}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-red-500 hover:bg-red-50 transition-colors"
+              >
+                <LogOut size={16} />
+                Sign Out
               </button>
             </div>
           )}

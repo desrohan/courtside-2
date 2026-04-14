@@ -24,12 +24,29 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const CURRENT_ORG_KEY = 'courtside_current_org';
+
+function loadPersistedOrg(): OrgMembership | null {
+  try {
+    const raw = localStorage.getItem(CURRENT_ORG_KEY);
+    return raw ? (JSON.parse(raw) as OrgMembership) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [memberships, setMemberships] = useState<OrgMembership[]>([]);
-  const [currentOrg, setCurrentOrg] = useState<OrgMembership | null>(null);
+  const [currentOrg, setCurrentOrgState] = useState<OrgMembership | null>(loadPersistedOrg);
   const [loading, setLoading] = useState(true);
+
+  function setCurrentOrg(org: OrgMembership | null) {
+    setCurrentOrgState(org);
+    if (org) localStorage.setItem(CURRENT_ORG_KEY, JSON.stringify(org));
+    else localStorage.removeItem(CURRENT_ORG_KEY);
+  }
 
   async function fetchMemberships(userId: string): Promise<OrgMembership[]> {
     const { data, error } = await supabase
@@ -54,16 +71,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     const orgs = await fetchMemberships(user.id);
     setMemberships(orgs);
-    // Keep currentOrg in sync if it still exists
     if (currentOrg) {
       const updated = orgs.find(o => o.orgId === currentOrg.orgId);
-      if (updated) setCurrentOrg(updated);
+      setCurrentOrg(updated ?? null);
     }
   }
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    // Use onAuthStateChange as the single source of truth.
+    // It fires INITIAL_SESSION immediately with the current session,
+    // so we don't need a separate getSession() call.
+    let initialized = false;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
 
@@ -71,34 +91,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const orgs = await fetchMemberships(session.user.id);
           setMemberships(orgs);
-          if (orgs.length === 1) setCurrentOrg(orgs[0]);
+
+          // Restore persisted org if it's still valid, otherwise auto-select
+          const persisted = loadPersistedOrg();
+          const stillValid = persisted && orgs.some(o => o.orgId === persisted.orgId);
+          if (stillValid) {
+            // Keep the persisted selection (state already initialized from localStorage)
+          } else if (orgs.length === 1) {
+            setCurrentOrg(orgs[0]);
+          } else {
+            setCurrentOrg(null);
+          }
         } catch (e) {
           console.error('Failed to fetch memberships:', e);
-        }
-      }
-
-      setLoading(false);
-    }).catch((err) => {
-      console.error('getSession failed:', err);
-      setLoading(false);
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-
-      if (session?.user) {
-        const orgs = await fetchMemberships(session.user.id);
-        setMemberships(orgs);
-        if (orgs.length === 1) setCurrentOrg(orgs[0]);
-        else if (orgs.length === 0) {
-          setCurrentOrg(null);
-          setMemberships([]);
         }
       } else {
         setMemberships([]);
         setCurrentOrg(null);
+      }
+
+      if (!initialized) {
+        initialized = true;
+        setLoading(false);
       }
     });
 

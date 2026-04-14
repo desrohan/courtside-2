@@ -3,12 +3,14 @@ import { motion } from 'framer-motion';
 import {
   Calendar, Users, Trophy, Activity, TrendingUp, CheckCircle2,
   HelpCircle, ArrowRight, Clock, Shield, Dumbbell, HeartPulse,
-  Route, ListChecks, Droplets, UserCog, FileText,
+  Route, ListChecks, Droplets, UserCog, FileText, Copy, Check,
 } from 'lucide-react';
-import { currentUser } from '@/data/users';
+import { useState, useEffect } from 'react';
 import { events } from '@/data/events';
 import { teams } from '@/data/teams';
 import { format, isToday, isTomorrow, isAfter } from 'date-fns';
+import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 
 const stagger = {
   container: { transition: { staggerChildren: 0.06 } },
@@ -18,6 +20,30 @@ const stagger = {
 export default function Dashboard() {
   const { organizationId } = useParams();
   const navigate = useNavigate();
+  const { user, currentOrg } = useAuth();
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const firstName = user?.user_metadata?.full_name?.split(' ')[0]
+    ?? user?.email?.split('@')[0]
+    ?? 'there';
+
+  useEffect(() => {
+    if (!currentOrg) return;
+    supabase
+      .from('organizations')
+      .select('invite_code')
+      .eq('id', currentOrg.orgId)
+      .single()
+      .then(({ data }) => { if (data) setInviteCode(data.invite_code); });
+  }, [currentOrg]);
+
+  const handleCopy = () => {
+    if (!inviteCode) return;
+    navigator.clipboard.writeText(inviteCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const todayEvents = events.filter(e => {
     const d = new Date(e.start.date);
@@ -59,7 +85,7 @@ export default function Dashboard() {
         <div className="relative z-10">
           <p className="text-court-100 text-sm font-medium mb-1">{format(new Date(), 'EEEE, MMMM do yyyy')}</p>
           <h1 className="text-2xl font-extrabold mb-2">
-            Welcome back, {currentUser.firstName}! 👋
+            Welcome back, {firstName}! 👋
           </h1>
           <p className="text-court-100 text-sm max-w-lg">
             You have <span className="text-white font-semibold">{todayEvents.length} events</span> scheduled today
@@ -105,6 +131,33 @@ export default function Dashboard() {
             <p className="text-xs text-dark-400 mt-0.5">{stat.label}</p>
           </div>
         ))}
+      </motion.div>
+
+      {/* Invite Code Card */}
+      <motion.div variants={stagger.item} className="bg-white rounded-2xl border border-dark-100 px-6 py-4 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-xs font-bold uppercase tracking-wider text-dark-400 mb-0.5">Organization Invite Code</p>
+          <p className="text-sm text-dark-500">Share this code so members can join your organization.</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="px-5 py-2.5 bg-dark-50 rounded-xl border border-dark-100">
+            <span className="text-lg font-mono font-bold tracking-[0.2em] text-dark-800">
+              {inviteCode ?? '········'}
+            </span>
+          </div>
+          <button
+            onClick={handleCopy}
+            disabled={!inviteCode}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+              copied
+                ? 'bg-green-500 text-white'
+                : 'bg-court-500 hover:bg-court-600 text-white'
+            } disabled:opacity-40`}
+          >
+            {copied ? <Check size={15} /> : <Copy size={15} />}
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
       </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
