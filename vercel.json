@@ -1,6 +1,7 @@
 {
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/chat-api/(.*)", "destination": "https://chat.courtsideanalytics.com/$1" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
