@@ -99,8 +99,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const { token, chat_user_id } = await res.json();
         console.log('[Chat] Got session token for chat user:', chat_user_id);
 
+        // In production, proxy through Vercel rewrite to avoid CORS issues
+        const chatBaseUrl = import.meta.env.PROD
+          ? `${window.location.origin}/chat-api`
+          : (import.meta.env.CHAT_API_URL as string);
+
         const client = new SessionClient({
-          baseUrl: import.meta.env.CHAT_API_URL as string,
+          baseUrl: chatBaseUrl,
           sessionToken: token,
           appId: import.meta.env.CHAT_APP_ID as string,
         });
