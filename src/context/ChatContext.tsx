@@ -62,7 +62,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     async function init() {
       try {
         console.log('[Chat] Starting init for org', currentOrg!.orgId);
-        // Fetch chat session token from our API route.
         const accessToken = session!.access_token;
         console.log('[Chat] Fetching token from /api/chat/token…');
         const res = await fetch('/api/chat/token', {
@@ -79,7 +78,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           console.error('[Chat] Token fetch failed:', res.status, errText);
           return;
         }
-        // Only bail after we've successfully read the response
         if (cancelled) return;
 
         const { token, chat_user_id } = await res.json();
@@ -91,80 +89,101 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           appId: import.meta.env.CHAT_APP_ID as string,
         });
 
+        // Check cancelled before committing — React Strict Mode in dev will
+        // unmount→remount, and the first init's cleanup fires while we're
+        // still awaiting. If cancelled, bail so the second mount can succeed.
+        if (cancelled) return;
+
         clientRef.current = client;
         setChatUserId(chat_user_id);
 
-        // Connect WebSocket
+        // Fetch channels via REST first (doesn't need WS)
+        console.log('[Chat] Fetching channels…');
+        await fetchChannels(client);
+        console.log('[Chat] Channels loaded ✓');
+
+        // Check cancelled again before starting WS — Strict Mode cleanup
+        // may have fired during the fetchChannels await
+        if (cancelled) {
+          console.log('[Chat] Cancelled before WS connect (Strict Mode cleanup)');
+          return;
+        }
+
+        // Connect WebSocket for real-time push (non-blocking — REST still works if WS fails)
         console.log('[Chat] Connecting WebSocket…');
-        await client.connect();
-        console.log('[Chat] WebSocket connected ✓');
+        try {
+          await client.connect();
+          console.log('[Chat] WebSocket connected ✓');
 
-      // Subscribe to real-time events
-      client
-        .onMessage(event => {
-          setMessages(prev => {
-            const existing = prev[event.channelUrl] ?? [];
-            if (existing.some(m => m.id === event.message.id)) return prev;
-            return { ...prev, [event.channelUrl]: [...existing, event.message] };
-          });
-          setChannels(prev => prev.map(ch =>
-            ch.channel_url === event.channelUrl
-              ? { ...ch, unread_count: ch.unread_count + 1 }
-              : ch
-          ));
-        })
-        .onMessageUpdated(event => {
-          setMessages(prev => {
-            const list = prev[event.channelUrl];
-            if (!list) return prev;
-            return {
-              ...prev,
-              [event.channelUrl]: list.map(m => m.id === event.message.id ? event.message : m),
-            };
-          });
-        })
-        .onMessageDeleted(event => {
-          setMessages(prev => {
-            const list = prev[event.channelUrl];
-            if (!list) return prev;
-            return {
-              ...prev,
-              [event.channelUrl]: list.filter(m => m.id !== event.messageId),
-            };
-          });
-        })
-        .onTyping((event: WsTypingUpdate) => {
-          setTypingUsers(prev => {
-            const current = prev[event.channelUrl] ?? [];
-            if (event.isTyping) {
-              if (current.includes(event.userId)) return prev;
-              return { ...prev, [event.channelUrl]: [...current, event.userId] };
-            } else {
-              return { ...prev, [event.channelUrl]: current.filter(n => n !== event.userId) };
-            }
-          });
-        })
-        .onReactionUpdated(event => {
-          setMessages(prev => {
-            const list = prev[event.channelUrl];
-            if (!list) return prev;
-            return {
-              ...prev,
-              [event.channelUrl]: list.map(m =>
-                m.id === event.messageId ? { ...m, reactions: event.reactions } : m
-              ),
-            };
-          });
-        })
-        .onSyncRequired(async () => {
-          await fetchChannels(client);
-        });
-
-      console.log('[Chat] Fetching channels…');
-      await fetchChannels(client);
-      console.log('[Chat] Init complete ✓');
+          // Register real-time event handlers AFTER connect (SDK requires it)
+          if (cancelled) return;
+          client
+            .onMessage(event => {
+              setMessages(prev => {
+                const existing = prev[event.channelUrl] ?? [];
+                if (existing.some(m => m.id === event.message.id)) return prev;
+                return { ...prev, [event.channelUrl]: [...existing, event.message] };
+              });
+              setChannels(prev => prev.map(ch =>
+                ch.channel_url === event.channelUrl
+                  ? { ...ch, unread_count: ch.unread_count + 1 }
+                  : ch
+              ));
+            })
+            .onMessageUpdated(event => {
+              setMessages(prev => {
+                const list = prev[event.channelUrl];
+                if (!list) return prev;
+                return {
+                  ...prev,
+                  [event.channelUrl]: list.map(m => m.id === event.message.id ? event.message : m),
+                };
+              });
+            })
+            .onMessageDeleted(event => {
+              setMessages(prev => {
+                const list = prev[event.channelUrl];
+                if (!list) return prev;
+                return {
+                  ...prev,
+                  [event.channelUrl]: list.filter(m => m.id !== event.messageId),
+                };
+              });
+            })
+            .onTyping((event: WsTypingUpdate) => {
+              setTypingUsers(prev => {
+                const current = prev[event.channelUrl] ?? [];
+                if (event.isTyping) {
+                  if (current.includes(event.userId)) return prev;
+                  return { ...prev, [event.channelUrl]: [...current, event.userId] };
+                } else {
+                  return { ...prev, [event.channelUrl]: current.filter(n => n !== event.userId) };
+                }
+              });
+            })
+            .onReactionUpdated(event => {
+              setMessages(prev => {
+                const list = prev[event.channelUrl];
+                if (!list) return prev;
+                return {
+                  ...prev,
+                  [event.channelUrl]: list.map(m =>
+                    m.id === event.messageId ? { ...m, reactions: event.reactions } : m
+                  ),
+                };
+              });
+            })
+            .onSyncRequired(async () => {
+              await fetchChannels(client);
+            });
+          console.log('[Chat] Event handlers registered ✓');
+        } catch (wsErr) {
+          if (!cancelled) {
+            console.warn('[Chat] WebSocket connection failed (REST still works):', (wsErr as Error).message);
+          }
+        }
       } catch (err) {
-        if (!cancelled) console.error('[Chat] Init failed:', err);
+        if (!cancelled) console.error('[Chat] Init error:', err);
       }
     }
 
@@ -220,43 +239,36 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
     console.log('[Chat] Sending message to', channelUrl, '— body length:', body.length);
     try {
-      const ack = await clientRef.current.sendMessageRealtime(channelUrl, body, {
-        parentMessageId,
+      // Use REST API as primary — it returns the full Message object so we
+      // can add it to local state immediately. The WS onMessage handler
+      // deduplicates by ID, so no double-rendering if the echo also arrives.
+      const msg = await clientRef.current.sendMessage(channelUrl, {
+        body,
+        type: 'user',
       });
-      console.log('[Chat] sendMessageRealtime ack:', ack);
-      if (!ack.ok) {
-        console.error('[Chat] sendMessage ack error:', ack.error);
-        // Fallback: try REST send
-        console.log('[Chat] Trying REST fallback…');
-        const msg = await clientRef.current.sendMessage(channelUrl, {
-          body,
-          type: 'user',
-        });
-        console.log('[Chat] REST send succeeded:', msg.id);
-        // Add message to local state
-        setMessages(prev => {
-          const existing = prev[channelUrl] ?? [];
-          if (existing.some(m => m.id === msg.id)) return prev;
-          return { ...prev, [channelUrl]: [...existing, msg] };
-        });
-      }
+      console.log('[Chat] REST send succeeded:', msg.id);
+      // Add message to local state immediately
+      setMessages(prev => {
+        const existing = prev[channelUrl] ?? [];
+        if (existing.some(m => m.id === msg.id)) return prev;
+        return { ...prev, [channelUrl]: [...existing, msg] };
+      });
     } catch (err) {
-      console.error('[Chat] sendMessage failed:', err);
-      // Fallback: try REST send
+      console.error('[Chat] sendMessage REST failed:', err);
+      // Fallback: try WebSocket send
       try {
-        console.log('[Chat] Trying REST fallback after error…');
-        const msg = await clientRef.current!.sendMessage(channelUrl, {
-          body,
-          type: 'user',
+        console.log('[Chat] Trying WS fallback…');
+        const ack = await clientRef.current.sendMessageRealtime(channelUrl, body, {
+          parentMessageId,
         });
-        console.log('[Chat] REST fallback succeeded:', msg.id);
-        setMessages(prev => {
-          const existing = prev[channelUrl] ?? [];
-          if (existing.some(m => m.id === msg.id)) return prev;
-          return { ...prev, [channelUrl]: [...existing, msg] };
-        });
-      } catch (restErr) {
-        console.error('[Chat] REST fallback also failed:', restErr);
+        console.log('[Chat] WS fallback ack:', ack);
+        if (ack.ok) {
+          // WS doesn't return the message, reload to fetch it
+          const { data } = await clientRef.current!.listMessages(channelUrl, { limit: 50 });
+          setMessages(prev => ({ ...prev, [channelUrl]: data }));
+        }
+      } catch (wsErr) {
+        console.error('[Chat] WS fallback also failed:', wsErr);
       }
     }
   }, []);
@@ -310,32 +322,40 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [session, currentOrg, refreshChannels]);
 
   const addReaction = useCallback((channelUrl: string, messageId: string, key: string) => {
-    clientRef.current?.addReactionRealtime(channelUrl, messageId, key);
+    try { clientRef.current?.addReactionRealtime(channelUrl, messageId, key); }
+    catch { /* WS not connected yet — silent */ }
   }, []);
 
   const removeReaction = useCallback((channelUrl: string, messageId: string, key: string) => {
-    clientRef.current?.removeReactionRealtime(channelUrl, messageId, key);
+    try { clientRef.current?.removeReactionRealtime(channelUrl, messageId, key); }
+    catch { /* WS not connected yet — silent */ }
   }, []);
 
   const pinMessage = useCallback(async (channelUrl: string, messageId: string) => {
-    if (!chatUserId) return;
-    await clientRef.current?.pinMessage(channelUrl, messageId);
-  }, [chatUserId]);
+    if (!clientRef.current) return;
+    try { await clientRef.current.pinMessage(channelUrl, messageId); }
+    catch (e) { console.warn('[Chat] pinMessage failed:', e); }
+  }, []);
 
   const unpinMessage = useCallback(async (channelUrl: string, messageId: string) => {
-    await clientRef.current?.unpinMessage(channelUrl, messageId);
+    if (!clientRef.current) return;
+    try { await clientRef.current.unpinMessage(channelUrl, messageId); }
+    catch (e) { console.warn('[Chat] unpinMessage failed:', e); }
   }, []);
 
   const startTyping = useCallback((channelUrl: string) => {
-    clientRef.current?.startTyping(channelUrl);
+    try { clientRef.current?.startTyping(channelUrl); }
+    catch { /* WS not connected yet — silent */ }
   }, []);
 
   const stopTyping = useCallback((channelUrl: string) => {
-    clientRef.current?.stopTyping(channelUrl);
+    try { clientRef.current?.stopTyping(channelUrl); }
+    catch { /* WS not connected yet — silent */ }
   }, []);
 
   const markRead = useCallback((channelUrl: string, messageId: string) => {
-    clientRef.current?.markReadRealtime(channelUrl, messageId);
+    try { clientRef.current?.markReadRealtime(channelUrl, messageId); }
+    catch { /* WS not connected yet — silent */ }
     setChannels(prev => prev.map(ch =>
       ch.channel_url === channelUrl ? { ...ch, unread_count: 0 } : ch
     ));

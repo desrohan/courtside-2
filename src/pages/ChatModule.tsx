@@ -131,6 +131,7 @@ export default function ChatModule() {
     pinMessage,
     startTyping, stopTyping,
     markRead,
+    refreshChannels,
   } = useChat();
   const { user, currentOrg, session } = useAuth();
 
@@ -149,6 +150,13 @@ export default function ChatModule() {
   const activeChannel = channels.find(c => c.channel_url === activeChannelUrl) ?? null;
   const activeMessages = activeChannelUrl ? (messages[activeChannelUrl] ?? []) : [];
   const totalUnread = channels.reduce((sum, ch) => sum + ch.unread_count, 0);
+
+  // Refresh channel list whenever the chat page mounts or the client connects
+  useEffect(() => {
+    if (client) {
+      refreshChannels();
+    }
+  }, [client, refreshChannels]);
 
   // Load messages when channel is selected
   useEffect(() => {
