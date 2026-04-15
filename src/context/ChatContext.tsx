@@ -16,8 +16,11 @@ interface ChatContextValue {
   channelsLoading: boolean;
   messages: Record<string, Message[]>;
   messagesLoading: boolean;
+  hasMoreMessages: Record<string, boolean>;
+  loadingOlder: boolean;
   typingUsers: Record<string, string[]>; // channelUrl → list of nicknames typing
   loadMessages: (channelUrl: string) => Promise<void>;
+  loadOlderMessages: (channelUrl: string) => Promise<void>;
   sendMessage: (channelUrl: string, body: string, parentMessageId?: string, files?: File[]) => Promise<void>;
   createGroup: (name: string, supabaseUserIds: string[]) => Promise<ChannelWithUnread | null>;
   startDM: (supabaseUserId: string) => Promise<ChannelWithUnread | null>;
@@ -28,6 +31,7 @@ interface ChatContextValue {
   startTyping: (channelUrl: string) => void;
   stopTyping: (channelUrl: string) => void;
   markRead: (channelUrl: string, messageId: string) => void;
+  markAsRead: (channelUrl: string) => Promise<void>;
   refreshChannels: () => Promise<void>;
   replyToThread: (channelUrl: string, messageId: string, body: string) => Promise<void>;
   getThreadReplies: (channelUrl: string, messageId: string) => Promise<Message[]>;
@@ -45,6 +49,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
+  const [paginationCursors, setPaginationCursors] = useState<Record<string, string | null>>({});
+  const [hasMoreMessages, setHasMoreMessages] = useState<Record<string, boolean>>({});
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   // ── Chat token + connect ─────────────────────────────
   useEffect(() => {
@@ -227,14 +234,50 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!clientRef.current) return;
     setMessagesLoading(true);
     try {
-      const { data } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
+      const { data, pagination } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
       // Sort ascending by created_at so newest messages are at the bottom
       const sorted = [...data].sort((a, b) =>
         new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
       setMessages(prev => ({ ...prev, [channelUrl]: sorted }));
+      paginationCursorsRef.current = { ...paginationCursorsRef.current, [channelUrl]: pagination?.prev_cursor ?? null };
+      setPaginationCursors(prev => ({ ...prev, [channelUrl]: pagination?.prev_cursor ?? null }));
+      setHasMoreMessages(prev => ({ ...prev, [channelUrl]: pagination?.has_more ?? false }));
     } finally {
       setMessagesLoading(false);
+    }
+  }, []);
+
+  const paginationCursorsRef = useRef<Record<string, string | null>>({});
+
+  const loadOlderMessages = useCallback(async (channelUrl: string) => {
+    if (!clientRef.current) return;
+    const cursor = paginationCursorsRef.current[channelUrl];
+    if (!cursor) return; // no more pages
+    setLoadingOlder(true);
+    try {
+      const { data, pagination } = await clientRef.current.listMessages(channelUrl, {
+        limit: 50,
+        before: cursor,
+      });
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      // Prepend older messages
+      setMessages(prev => {
+        const existing = prev[channelUrl] ?? [];
+        // Deduplicate by message id
+        const existingIds = new Set(existing.map(m => m.id));
+        const newMsgs = sorted.filter(m => !existingIds.has(m.id));
+        return { ...prev, [channelUrl]: [...newMsgs, ...existing] };
+      });
+      const newCursor = pagination?.prev_cursor ?? null;
+      const newHasMore = pagination?.has_more ?? false;
+      paginationCursorsRef.current = { ...paginationCursorsRef.current, [channelUrl]: newCursor };
+      setPaginationCursors(prev => ({ ...prev, [channelUrl]: newCursor }));
+      setHasMoreMessages(prev => ({ ...prev, [channelUrl]: newHasMore }));
+    } finally {
+      setLoadingOlder(false);
     }
   }, []);
 
@@ -446,6 +489,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const markRead = useCallback((channelUrl: string, messageId: string) => {
     try { clientRef.current?.markReadRealtime(channelUrl, messageId); }
     catch { /* WS not connected yet — silent */ }
+  }, []);
+
+  const markAsRead = useCallback(async (channelUrl: string) => {
+    try {
+      await clientRef.current?.markAsRead(channelUrl);
+    } catch { /* silent */ }
     setChannels(prev => prev.map(ch =>
       ch.channel_url === channelUrl ? { ...ch, unread_count: 0 } : ch
     ));
@@ -485,8 +534,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       channelsLoading,
       messages,
       messagesLoading,
+      hasMoreMessages,
+      loadingOlder,
       typingUsers,
       loadMessages,
+      loadOlderMessages,
       sendMessage,
       createGroup,
       startDM,
@@ -497,6 +549,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       startTyping,
       stopTyping,
       markRead,
+      markAsRead,
       refreshChannels,
       replyToThread,
       getThreadReplies,

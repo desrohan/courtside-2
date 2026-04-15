@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Plus, Send, Paperclip, Smile, Pin, Reply, Trash2,
@@ -490,13 +490,14 @@ export default function ChatModule() {
     client, chatUserId,
     channels, channelsLoading,
     messages, messagesLoading,
+    hasMoreMessages, loadingOlder,
     typingUsers,
-    loadMessages, sendMessage: sendChatMessage,
+    loadMessages, loadOlderMessages, sendMessage: sendChatMessage,
     createGroup, startDM,
     addReaction, removeReaction,
     pinMessage,
     startTyping, stopTyping,
-    markRead,
+    markRead, markAsRead,
     refreshChannels,
   } = useChat();
   const { user, currentOrg, session } = useAuth();
@@ -515,25 +516,112 @@ export default function ChatModule() {
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
   const [fullEmojiForMsgId, setFullEmojiForMsgId] = useState<string | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [unreadDividerIndex, setUnreadDividerIndex] = useState<number | null>(null);
+  const [showUnreadBadge, setShowUnreadBadge] = useState(false);
+  const [capturedUnreadCount, setCapturedUnreadCount] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const unreadDividerRef = useRef<HTMLDivElement>(null);
+  const unreadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dividerPlacedRef = useRef<string | null>(null); // channelUrl for which divider was placed
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const emojiAnchorRef = useRef<HTMLButtonElement | null>(null);
   const inputEmojiRef = useRef<HTMLButtonElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const activeChannel = channels.find(c => c.channel_url === activeChannelUrl) ?? null;
   const activeMessages = activeChannelUrl ? (messages[activeChannelUrl] ?? []) : [];
   const totalUnread = channels.reduce((sum, ch) => sum + ch.unread_count, 0);
 
+  const prevLastMsgIdRef = useRef<string | null>(null);
+  const prevChannelRef = useRef<string | null>(null);
+
   useEffect(() => { if (client) refreshChannels(); }, [client, refreshChannels]);
   useEffect(() => { if (activeChannelUrl) loadMessages(activeChannelUrl); }, [activeChannelUrl, loadMessages]);
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [activeChannelUrl, activeMessages.length]);
+
+  // Scroll to bottom on channel switch or when new messages are added at the end (not on prepend of older)
   useEffect(() => {
-    if (activeChannelUrl && activeMessages.length > 0) {
-      const lastMsg = activeMessages[activeMessages.length - 1];
-      markRead(activeChannelUrl, lastMsg.id);
+    const channelChanged = prevChannelRef.current !== activeChannelUrl;
+    const lastMsgId = activeMessages.length > 0 ? activeMessages[activeMessages.length - 1].id : null;
+    const newMessageAtEnd = lastMsgId !== prevLastMsgIdRef.current && prevLastMsgIdRef.current !== null;
+    if (channelChanged || newMessageAtEnd) {
+      messagesEndRef.current?.scrollIntoView({ behavior: channelChanged ? 'auto' : 'smooth' });
     }
-  }, [activeChannelUrl, activeMessages.length, markRead]);
+    prevLastMsgIdRef.current = lastMsgId;
+    prevChannelRef.current = activeChannelUrl;
+  }, [activeChannelUrl, activeMessages]);
+
+  // Capture unread count when switching channels (before it gets cleared)
+  useEffect(() => {
+    if (!activeChannelUrl) return;
+    const ch = channels.find(c => c.channel_url === activeChannelUrl);
+    const count = ch?.unread_count ?? 0;
+    setCapturedUnreadCount(count);
+    dividerPlacedRef.current = null; // reset for new channel
+    if (count > 0) {
+      setShowUnreadBadge(true);
+    } else {
+      setUnreadDividerIndex(null);
+      setShowUnreadBadge(false);
+    }
+    // Clear any previous timer
+    if (unreadTimerRef.current) clearTimeout(unreadTimerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChannelUrl]);
+
+  // Place divider ONCE when messages first load for a channel
+  useEffect(() => {
+    if (!activeChannelUrl || capturedUnreadCount === 0 || activeMessages.length === 0) return;
+    // Only place divider once per channel open
+    if (dividerPlacedRef.current === activeChannelUrl) return;
+    const dividerIdx = activeMessages.length - capturedUnreadCount;
+    if (dividerIdx > 0) {
+      setUnreadDividerIndex(dividerIdx);
+      dividerPlacedRef.current = activeChannelUrl;
+    } else {
+      // All loaded messages are unread. Place divider at 0.
+      setUnreadDividerIndex(0);
+      // If there are more pages, auto-load to reveal the divider boundary
+      if (capturedUnreadCount > activeMessages.length && hasMoreMessages[activeChannelUrl] && !loadingOlder) {
+        loadOlderMessages(activeChannelUrl);
+        return; // don't mark as placed yet — will re-run after older messages load
+      }
+      dividerPlacedRef.current = activeChannelUrl;
+    }
+  }, [activeChannelUrl, activeMessages.length, capturedUnreadCount, hasMoreMessages, loadingOlder, loadOlderMessages]);
+
+  // Mark as read only when divider stays visible for 3 seconds continuously
+  useEffect(() => {
+    if (unreadDividerIndex === null || !activeChannelUrl) return;
+    const dividerEl = unreadDividerRef.current;
+    const container = scrollContainerRef.current;
+    if (!dividerEl || !container) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          // Start 3s timer when divider enters view
+          unreadTimerRef.current = setTimeout(() => {
+            setUnreadDividerIndex(null);
+            setShowUnreadBadge(false);
+            markAsRead(activeChannelUrl);
+          }, 3000);
+        } else {
+          // Divider left view — cancel the timer
+          if (unreadTimerRef.current) {
+            clearTimeout(unreadTimerRef.current);
+            unreadTimerRef.current = null;
+          }
+        }
+      },
+      { root: container, threshold: 0.5 },
+    );
+    observer.observe(dividerEl);
+    return () => {
+      observer.disconnect();
+      if (unreadTimerRef.current) clearTimeout(unreadTimerRef.current);
+    };
+  }, [unreadDividerIndex, activeChannelUrl, markAsRead]);
 
   useEffect(() => {
     if (!currentOrg || !session) return;
@@ -591,6 +679,37 @@ export default function ChatModule() {
   }, [createGroup]);
 
   const handleFileSelect = useCallback(() => { fileInputRef.current?.click(); }, []);
+
+  const scrollToUnread = useCallback(() => {
+    unreadDividerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
+  // Infinite scroll: load older messages when user scrolls to top
+  const loadOlderSentinelRef = useRef<HTMLDivElement>(null);
+  const loadingOlderRef = useRef(false);
+  loadingOlderRef.current = loadingOlder;
+
+  useEffect(() => {
+    const sentinel = loadOlderSentinelRef.current;
+    const container = scrollContainerRef.current;
+    if (!sentinel || !container || !activeChannelUrl) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !loadingOlderRef.current) {
+          const prevScrollHeight = container.scrollHeight;
+          loadOlderMessages(activeChannelUrl).then(() => {
+            requestAnimationFrame(() => {
+              container.scrollTop += container.scrollHeight - prevScrollHeight;
+            });
+          });
+        }
+      },
+      { root: container, threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [activeChannelUrl, loadOlderMessages]);
 
   const handleFilesChosen = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -727,8 +846,30 @@ export default function ChatModule() {
           </div>
 
           <div className="flex flex-1 overflow-hidden">
-            <div className="flex-1 flex flex-col min-w-0">
-              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+            <div className="flex-1 flex flex-col min-w-0 relative">
+              {/* Sticky unread badge */}
+              <AnimatePresence>
+                {showUnreadBadge && unreadDividerIndex !== null && capturedUnreadCount > 0 && (
+                  <motion.button
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    onClick={scrollToUnread}
+                    className="absolute top-2 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 bg-red-500 text-white text-xs font-semibold rounded-full shadow-lg hover:bg-red-600 transition-colors cursor-pointer"
+                  >
+                    {capturedUnreadCount} unread message{capturedUnreadCount !== 1 ? 's' : ''} ↑
+                  </motion.button>
+                )}
+              </AnimatePresence>
+
+              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+                {/* Sentinel for infinite scroll + loading indicator */}
+                <div ref={loadOlderSentinelRef} className="shrink-0" />
+                {loadingOlder && (
+                  <div className="flex justify-center py-2">
+                    <Loader2 size={16} className="text-dark-300 animate-spin" />
+                  </div>
+                )}
                 {messagesLoading && activeMessages.length === 0 ? (
                   <div className="flex items-center justify-center py-12"><Loader2 size={18} className="text-dark-300 animate-spin" /></div>
                 ) : activeMessages.length === 0 ? (
@@ -739,9 +880,18 @@ export default function ChatModule() {
                     const senderName = msg.sender?.nickname ?? 'Unknown';
                     const senderInit = userInitials(senderName);
                     const showAvatar = i === 0 || activeMessages[i - 1].sender?.user_id !== msg.sender?.user_id;
+                    const showUnreadDivider = unreadDividerIndex === i;
 
                     return (
-                      <div key={msg.id} className={`flex gap-2.5 group ${mine ? 'flex-row-reverse' : ''}`}>
+                      <React.Fragment key={msg.id}>
+                        {showUnreadDivider && (
+                          <div ref={unreadDividerRef} className="flex items-center gap-3 py-1">
+                            <div className="flex-1 h-px bg-red-400" />
+                            <span className="text-[11px] font-semibold text-red-500 shrink-0">Unread messages</span>
+                            <div className="flex-1 h-px bg-red-400" />
+                          </div>
+                        )}
+                        <div className={`flex gap-2.5 group ${mine ? 'flex-row-reverse' : ''}`}>
                         {showAvatar ? (
                           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-court-400 to-court-600 flex items-center justify-center shrink-0 mt-0.5">
                             {msg.sender?.profile_url ? (
@@ -819,6 +969,7 @@ export default function ChatModule() {
                           )}
                         </div>
                       </div>
+                      </React.Fragment>
                     );
                   })
                 )}
