@@ -16,9 +16,16 @@ interface ChatContextValue {
   channelsLoading: boolean;
   messages: Record<string, Message[]>;
   messagesLoading: boolean;
+  hasMoreMessages: Record<string, boolean>;
+  hasNewerMessages: Record<string, boolean>;
+  loadingOlder: boolean;
+  loadingNewer: boolean;
   typingUsers: Record<string, string[]>; // channelUrl → list of nicknames typing
   loadMessages: (channelUrl: string) => Promise<void>;
-  sendMessage: (channelUrl: string, body: string, parentMessageId?: string) => Promise<void>;
+  loadOlderMessages: (channelUrl: string) => Promise<void>;
+  loadMessagesAroundUnread: (channelUrl: string, unreadCount: number) => Promise<{ dividerIndex: number }>;
+  loadNewerMessages: (channelUrl: string) => Promise<void>;
+  sendMessage: (channelUrl: string, body: string, parentMessageId?: string, files?: File[]) => Promise<void>;
   createGroup: (name: string, supabaseUserIds: string[]) => Promise<ChannelWithUnread | null>;
   startDM: (supabaseUserId: string) => Promise<ChannelWithUnread | null>;
   addReaction: (channelUrl: string, messageId: string, key: string) => void;
@@ -28,7 +35,10 @@ interface ChatContextValue {
   startTyping: (channelUrl: string) => void;
   stopTyping: (channelUrl: string) => void;
   markRead: (channelUrl: string, messageId: string) => void;
+  markAsRead: (channelUrl: string) => Promise<void>;
   refreshChannels: () => Promise<void>;
+  replyToThread: (channelUrl: string, messageId: string, body: string) => Promise<void>;
+  getThreadReplies: (channelUrl: string, messageId: string) => Promise<Message[]>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -43,22 +53,33 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
+  const [paginationCursors, setPaginationCursors] = useState<Record<string, string | null>>({});
+  const [hasMoreMessages, setHasMoreMessages] = useState<Record<string, boolean>>({});
+  const [hasNewerMessages, setHasNewerMessages] = useState<Record<string, boolean>>({});
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [loadingNewer, setLoadingNewer] = useState(false);
+  const forwardCursorsRef = useRef<Record<string, string | null>>({});
 
   // ── Chat token + connect ─────────────────────────────
   useEffect(() => {
-    if (!session || !currentOrg) return;
+    if (!session || !currentOrg) {
+      console.log('[Chat] Skipping init — session:', !!session, 'currentOrg:', !!currentOrg);
+      return;
+    }
 
     // Skip re-connecting if already connected to this org
-    if (clientRef.current?.isConnected && currentOrg.orgId === chatUserId?.split('::')[0]) return;
+    if (clientRef.current?.isConnected && currentOrg.orgId === chatUserId?.split('::')[0]) {
+      console.log('[Chat] Already connected to org', currentOrg.orgId);
+      return;
+    }
 
     let cancelled = false;
 
     async function init() {
       try {
-        // Fetch chat session token from our API route.
-        // Snapshot the token now — if it refreshes mid-flight we still use the
-        // token we got back from /api/chat/token (not the new access token).
+        console.log('[Chat] Starting init for org', currentOrg!.orgId);
         const accessToken = session!.access_token;
+        console.log('[Chat] Fetching token from /api/chat/token…');
         const res = await fetch('/api/chat/token', {
           method: 'POST',
           headers: {
@@ -69,13 +90,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
 
         if (!res.ok) {
-          console.warn('[Chat] Token fetch failed:', res.status);
+          const errText = await res.text().catch(() => '');
+          console.error('[Chat] Token fetch failed:', res.status, errText);
           return;
         }
-        // Only bail after we've successfully read the response
         if (cancelled) return;
 
         const { token, chat_user_id } = await res.json();
+        console.log('[Chat] Got session token for chat user:', chat_user_id);
 
         const client = new SessionClient({
           baseUrl: import.meta.env.CHAT_API_URL as string,
@@ -83,76 +105,101 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           appId: import.meta.env.CHAT_APP_ID as string,
         });
 
+        // Check cancelled before committing — React Strict Mode in dev will
+        // unmount→remount, and the first init's cleanup fires while we're
+        // still awaiting. If cancelled, bail so the second mount can succeed.
+        if (cancelled) return;
+
         clientRef.current = client;
         setChatUserId(chat_user_id);
 
-        // Connect WebSocket
-        await client.connect();
+        // Fetch channels via REST first (doesn't need WS)
+        console.log('[Chat] Fetching channels…');
+        await fetchChannels(client);
+        console.log('[Chat] Channels loaded ✓');
 
-      // Subscribe to real-time events
-      client
-        .onMessage(event => {
-          setMessages(prev => {
-            const existing = prev[event.channelUrl] ?? [];
-            if (existing.some(m => m.id === event.message.id)) return prev;
-            return { ...prev, [event.channelUrl]: [...existing, event.message] };
-          });
-          setChannels(prev => prev.map(ch =>
-            ch.channel_url === event.channelUrl
-              ? { ...ch, unread_count: ch.unread_count + 1 }
-              : ch
-          ));
-        })
-        .onMessageUpdated(event => {
-          setMessages(prev => {
-            const list = prev[event.channelUrl];
-            if (!list) return prev;
-            return {
-              ...prev,
-              [event.channelUrl]: list.map(m => m.id === event.message.id ? event.message : m),
-            };
-          });
-        })
-        .onMessageDeleted(event => {
-          setMessages(prev => {
-            const list = prev[event.channelUrl];
-            if (!list) return prev;
-            return {
-              ...prev,
-              [event.channelUrl]: list.filter(m => m.id !== event.messageId),
-            };
-          });
-        })
-        .onTyping((event: WsTypingUpdate) => {
-          setTypingUsers(prev => {
-            const current = prev[event.channelUrl] ?? [];
-            if (event.isTyping) {
-              if (current.includes(event.userId)) return prev;
-              return { ...prev, [event.channelUrl]: [...current, event.userId] };
-            } else {
-              return { ...prev, [event.channelUrl]: current.filter(n => n !== event.userId) };
-            }
-          });
-        })
-        .onReactionUpdated(event => {
-          setMessages(prev => {
-            const list = prev[event.channelUrl];
-            if (!list) return prev;
-            return {
-              ...prev,
-              [event.channelUrl]: list.map(m =>
-                m.id === event.messageId ? { ...m, reactions: event.reactions } : m
-              ),
-            };
-          });
-        })
-        .onSyncRequired(async () => {
-          await fetchChannels(client);
-        });
+        // Check cancelled again before starting WS — Strict Mode cleanup
+        // may have fired during the fetchChannels await
+        if (cancelled) {
+          console.log('[Chat] Cancelled before WS connect (Strict Mode cleanup)');
+          return;
+        }
 
-      await fetchChannels(client);
+        // Connect WebSocket for real-time push (non-blocking — REST still works if WS fails)
+        console.log('[Chat] Connecting WebSocket…');
+        try {
+          await client.connect();
+          console.log('[Chat] WebSocket connected ✓');
+
+          // Register real-time event handlers AFTER connect (SDK requires it)
+          if (cancelled) return;
+          client
+            .onMessage(event => {
+              setMessages(prev => {
+                const existing = prev[event.channelUrl] ?? [];
+                if (existing.some(m => m.id === event.message.id)) return prev;
+                return { ...prev, [event.channelUrl]: [...existing, event.message] };
+              });
+              setChannels(prev => prev.map(ch =>
+                ch.channel_url === event.channelUrl
+                  ? { ...ch, unread_count: ch.unread_count + 1 }
+                  : ch
+              ));
+            })
+            .onMessageUpdated(event => {
+              setMessages(prev => {
+                const list = prev[event.channelUrl];
+                if (!list) return prev;
+                return {
+                  ...prev,
+                  [event.channelUrl]: list.map(m => m.id === event.message.id ? event.message : m),
+                };
+              });
+            })
+            .onMessageDeleted(event => {
+              setMessages(prev => {
+                const list = prev[event.channelUrl];
+                if (!list) return prev;
+                return {
+                  ...prev,
+                  [event.channelUrl]: list.filter(m => m.id !== event.messageId),
+                };
+              });
+            })
+            .onTyping((event: WsTypingUpdate) => {
+              setTypingUsers(prev => {
+                const current = prev[event.channelUrl] ?? [];
+                if (event.isTyping) {
+                  if (current.includes(event.userId)) return prev;
+                  return { ...prev, [event.channelUrl]: [...current, event.userId] };
+                } else {
+                  return { ...prev, [event.channelUrl]: current.filter(n => n !== event.userId) };
+                }
+              });
+            })
+            .onReactionUpdated(event => {
+              setMessages(prev => {
+                const list = prev[event.channelUrl];
+                if (!list) return prev;
+                return {
+                  ...prev,
+                  [event.channelUrl]: list.map(m =>
+                    m.id === event.messageId ? { ...m, reactions: event.reactions } : m
+                  ),
+                };
+              });
+            })
+            .onSyncRequired(async () => {
+              await fetchChannels(client);
+            });
+          console.log('[Chat] Event handlers registered ✓');
+        } catch (wsErr) {
+          if (!cancelled) {
+            console.warn('[Chat] WebSocket connection failed (REST still works):', (wsErr as Error).message);
+          }
+        }
       } catch (err) {
-        if (!cancelled) console.error('[Chat] Init failed:', err);
+        if (!cancelled) console.error('[Chat] Init error:', err);
       }
     }
 
@@ -174,8 +221,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   async function fetchChannels(client: SessionClient) {
     setChannelsLoading(true);
     try {
+      console.log('[Chat] fetchChannels: calling getMyChannels()…');
       const { data } = await client.getMyChannels();
+      console.log('[Chat] fetchChannels: got', data.length, 'channels');
       setChannels(data);
+    } catch (err) {
+      console.error('[Chat] fetchChannels failed:', err);
     } finally {
       setChannelsLoading(false);
     }
@@ -190,23 +241,234 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (!clientRef.current) return;
     setMessagesLoading(true);
     try {
-      const { data } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
-      setMessages(prev => ({ ...prev, [channelUrl]: data }));
+      const { data, pagination } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
+      // Sort ascending by created_at so newest messages are at the bottom
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      setMessages(prev => ({ ...prev, [channelUrl]: sorted }));
+      paginationCursorsRef.current = { ...paginationCursorsRef.current, [channelUrl]: pagination?.prev_cursor ?? null };
+      setPaginationCursors(prev => ({ ...prev, [channelUrl]: pagination?.prev_cursor ?? null }));
+      setHasMoreMessages(prev => ({ ...prev, [channelUrl]: pagination?.has_more ?? false }));
+      // We loaded the latest page — nothing newer exists
+      forwardCursorsRef.current = { ...forwardCursorsRef.current, [channelUrl]: null };
+      setHasNewerMessages(prev => ({ ...prev, [channelUrl]: false }));
     } finally {
       setMessagesLoading(false);
     }
   }, []);
 
-  const sendMessage = useCallback(async (channelUrl: string, body: string, parentMessageId?: string) => {
+  const paginationCursorsRef = useRef<Record<string, string | null>>({});
+
+  const loadOlderMessages = useCallback(async (channelUrl: string) => {
     if (!clientRef.current) return;
-    const ack = await clientRef.current.sendMessageRealtime(channelUrl, body, {
-      parentMessageId,
-    });
-    if (!ack.ok) console.error('[sendMessage] ack error:', ack.error);
+    const cursor = paginationCursorsRef.current[channelUrl];
+    if (!cursor) return; // no more pages
+    setLoadingOlder(true);
+    try {
+      const { data, pagination } = await clientRef.current.listMessages(channelUrl, {
+        limit: 50,
+        before: cursor,
+      });
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      // Prepend older messages
+      setMessages(prev => {
+        const existing = prev[channelUrl] ?? [];
+        // Deduplicate by message id
+        const existingIds = new Set(existing.map(m => m.id));
+        const newMsgs = sorted.filter(m => !existingIds.has(m.id));
+        return { ...prev, [channelUrl]: [...newMsgs, ...existing] };
+      });
+      const newCursor = pagination?.prev_cursor ?? null;
+      const newHasMore = pagination?.has_more ?? false;
+      paginationCursorsRef.current = { ...paginationCursorsRef.current, [channelUrl]: newCursor };
+      setPaginationCursors(prev => ({ ...prev, [channelUrl]: newCursor }));
+      setHasMoreMessages(prev => ({ ...prev, [channelUrl]: newHasMore }));
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, []);
+
+  // Batch-load enough messages to cover unreadCount + context, commit state once
+  const loadMessagesAroundUnread = useCallback(async (channelUrl: string, unreadCount: number): Promise<{ dividerIndex: number }> => {
+    if (!clientRef.current) return { dividerIndex: 0 };
+    setMessagesLoading(true);
+    try {
+      const targetTotal = unreadCount + 20; // 20 messages of read context above divider
+      const allMessages: Message[] = [];
+      let cursor: string | undefined = undefined;
+      let hasMore = true;
+
+      while (allMessages.length < targetTotal && hasMore) {
+        const opts: Record<string, unknown> = { limit: 50 };
+        if (cursor) opts.before = cursor;
+        const { data, pagination } = await clientRef.current!.listMessages(channelUrl, opts as any);
+        const sorted = [...data].sort((a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        // Prepend older messages
+        allMessages.unshift(...sorted);
+        cursor = pagination?.prev_cursor ?? undefined;
+        hasMore = pagination?.has_more ?? false;
+      }
+
+      // Deduplicate by id (in case of overlaps)
+      const seen = new Set<string>();
+      const deduped = allMessages.filter(m => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+
+      // Sort ascending
+      deduped.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+      // Single state commit
+      setMessages(prev => ({ ...prev, [channelUrl]: deduped }));
+      paginationCursorsRef.current = { ...paginationCursorsRef.current, [channelUrl]: cursor ?? null };
+      setPaginationCursors(prev => ({ ...prev, [channelUrl]: cursor ?? null }));
+      setHasMoreMessages(prev => ({ ...prev, [channelUrl]: hasMore }));
+      // We loaded up to the newest — nothing newer exists
+      forwardCursorsRef.current = { ...forwardCursorsRef.current, [channelUrl]: null };
+      setHasNewerMessages(prev => ({ ...prev, [channelUrl]: false }));
+
+      const dividerIndex = Math.max(0, deduped.length - unreadCount);
+      return { dividerIndex };
+    } finally {
+      setMessagesLoading(false);
+    }
+  }, []);
+
+  // Load newer messages (forward pagination) for when user is mid-history
+  const loadNewerMessages = useCallback(async (channelUrl: string) => {
+    if (!clientRef.current) return;
+    const msgs = messages[channelUrl] ?? [];
+    if (msgs.length === 0) return;
+
+    setLoadingNewer(true);
+    try {
+      // Use the newest loaded message's created_at as the after cursor
+      const newestMsg = msgs[msgs.length - 1];
+      const { data, pagination } = await clientRef.current.listMessages(channelUrl, {
+        limit: 50,
+        after: newestMsg.created_at,
+      } as any);
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      // Append newer messages
+      setMessages(prev => {
+        const existing = prev[channelUrl] ?? [];
+        const existingIds = new Set(existing.map(m => m.id));
+        const newMsgs = sorted.filter(m => !existingIds.has(m.id));
+        return { ...prev, [channelUrl]: [...existing, ...newMsgs] };
+      });
+      const moreNewer = pagination?.has_more ?? false;
+      setHasNewerMessages(prev => ({ ...prev, [channelUrl]: moreNewer }));
+    } finally {
+      setLoadingNewer(false);
+    }
+  }, [messages]);
+
+  const sendMessage = useCallback(async (channelUrl: string, body: string, parentMessageId?: string, files?: File[]) => {
+    if (!clientRef.current) {
+      console.error('[Chat] sendMessage: no client connected');
+      return;
+    }
+    console.log('[Chat] Sending message to', channelUrl, '— body length:', body.length, 'parentMessageId:', parentMessageId, 'files:', files?.length ?? 0);
+
+    // Upload files to Supabase Storage and build MessageFile objects
+    let uploadedFiles: Array<{ file_url: string; file_name: string; file_type: string; file_size: number }> = [];
+    if (files && files.length > 0) {
+      for (const file of files) {
+        try {
+          const ext = file.name.split('.').pop() || 'bin';
+          const path = `chat/${channelUrl}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+          const { data: uploadData, error } = await supabase.storage
+            .from('chat-files')
+            .upload(path, file, { contentType: file.type, upsert: false });
+          if (error) {
+            console.error('[Chat] File upload failed:', error.message);
+            continue;
+          }
+          const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(uploadData.path);
+          if (urlData.publicUrl) {
+            uploadedFiles.push({
+              file_url: urlData.publicUrl,
+              file_name: file.name,
+              file_type: file.type,
+              file_size: file.size,
+            });
+          }
+        } catch (err) {
+          console.error('[Chat] File upload error:', err);
+        }
+      }
+    }
+
+    const hasFiles = uploadedFiles.length > 0;
+
+    if (!body && !hasFiles) {
+      console.warn('[Chat] Nothing to send — body empty and no files uploaded');
+      return;
+    }
+
+    // If replying to a message, use replyToThread to create/add to a thread
+    if (parentMessageId) {
+      try {
+        await clientRef.current.replyToThread(channelUrl, parentMessageId, body || '(file)');
+        console.log('[Chat] Thread reply sent ✓');
+        const { data } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
+        const sorted = [...data].sort((a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        setMessages(prev => ({ ...prev, [channelUrl]: sorted }));
+      } catch (err) {
+        console.error('[Chat] replyToThread failed:', err);
+      }
+      return;
+    }
+
+    try {
+      // Build params — SDK passes them straight to REST API
+      const params: Record<string, unknown> = {
+        body: body || '',
+        type: hasFiles ? 'file' : 'user',
+      };
+      if (hasFiles) {
+        params.files = uploadedFiles;
+      }
+
+      const msg = await clientRef.current.sendMessage(channelUrl, params as any);
+      console.log('[Chat] REST send succeeded:', msg.id, 'type:', msg.type);
+      setMessages(prev => {
+        const existing = prev[channelUrl] ?? [];
+        if (existing.some(m => m.id === msg.id)) return prev;
+        return { ...prev, [channelUrl]: [...existing, msg] };
+      });
+    } catch (err) {
+      console.error('[Chat] sendMessage REST failed:', err);
+      try {
+        console.log('[Chat] Trying WS fallback…');
+        const ack = await clientRef.current.sendMessageRealtime(channelUrl, body || '(file)', {});
+        console.log('[Chat] WS fallback ack:', ack);
+        if (ack.ok) {
+          const { data } = await clientRef.current!.listMessages(channelUrl, { limit: 50 });
+          setMessages(prev => ({ ...prev, [channelUrl]: data }));
+        }
+      } catch (wsErr) {
+        console.error('[Chat] WS fallback also failed:', wsErr);
+      }
+    }
   }, []);
 
   const createGroup = useCallback(async (name: string, supabaseUserIds: string[]): Promise<ChannelWithUnread | null> => {
     if (!session || !currentOrg) return null;
+
+    // Always include the creator in the group
+    const allUserIds = Array.from(new Set([session.user.id, ...supabaseUserIds]));
 
     const res = await fetch('/api/channels/create', {
       method: 'POST',
@@ -218,7 +480,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         orgId: currentOrg.orgId,
         type: 'group',
         name,
-        userIds: supabaseUserIds,
+        userIds: allUserIds,
       }),
     });
 
@@ -250,36 +512,109 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return channel;
   }, [session, currentOrg, refreshChannels]);
 
-  const addReaction = useCallback((channelUrl: string, messageId: string, key: string) => {
-    clientRef.current?.addReactionRealtime(channelUrl, messageId, key);
+  const addReaction = useCallback(async (channelUrl: string, messageId: string, key: string) => {
+    if (!clientRef.current) return;
+    try {
+      const response = await clientRef.current.addReaction(channelUrl, messageId, key) as any;
+      console.log('[Chat] addReaction response:', JSON.stringify(response));
+      // API returns {ok, message_id, reactions: [{key, count}]} — extract the reactions array
+      const reactionsArray = response?.reactions ?? response;
+      setMessages(prev => {
+        const list = prev[channelUrl];
+        if (!list) return prev;
+        return {
+          ...prev,
+          [channelUrl]: list.map(m =>
+            m.id === messageId ? { ...m, reactions: reactionsArray as Message['reactions'] } : m
+          ),
+        };
+      });
+    } catch (e) {
+      console.warn('[Chat] addReaction failed:', e);
+    }
   }, []);
 
-  const removeReaction = useCallback((channelUrl: string, messageId: string, key: string) => {
-    clientRef.current?.removeReactionRealtime(channelUrl, messageId, key);
+  const removeReaction = useCallback(async (channelUrl: string, messageId: string, key: string) => {
+    if (!clientRef.current) return;
+    try {
+      const response = await clientRef.current.removeReaction(channelUrl, messageId, key) as any;
+      console.log('[Chat] removeReaction response:', JSON.stringify(response));
+      const reactionsArray = response?.reactions ?? response;
+      setMessages(prev => {
+        const list = prev[channelUrl];
+        if (!list) return prev;
+        return {
+          ...prev,
+          [channelUrl]: list.map(m =>
+            m.id === messageId ? { ...m, reactions: reactionsArray as Message['reactions'] } : m
+          ),
+        };
+      });
+    } catch (e) {
+      console.warn('[Chat] removeReaction failed:', e);
+    }
   }, []);
 
   const pinMessage = useCallback(async (channelUrl: string, messageId: string) => {
-    if (!chatUserId) return;
-    await clientRef.current?.pinMessage(channelUrl, messageId);
-  }, [chatUserId]);
+    if (!clientRef.current) return;
+    try { await clientRef.current.pinMessage(channelUrl, messageId); }
+    catch (e) { console.warn('[Chat] pinMessage failed:', e); }
+  }, []);
 
   const unpinMessage = useCallback(async (channelUrl: string, messageId: string) => {
-    await clientRef.current?.unpinMessage(channelUrl, messageId);
+    if (!clientRef.current) return;
+    try { await clientRef.current.unpinMessage(channelUrl, messageId); }
+    catch (e) { console.warn('[Chat] unpinMessage failed:', e); }
   }, []);
 
   const startTyping = useCallback((channelUrl: string) => {
-    clientRef.current?.startTyping(channelUrl);
+    try { clientRef.current?.startTyping(channelUrl); }
+    catch { /* WS not connected yet — silent */ }
   }, []);
 
   const stopTyping = useCallback((channelUrl: string) => {
-    clientRef.current?.stopTyping(channelUrl);
+    try { clientRef.current?.stopTyping(channelUrl); }
+    catch { /* WS not connected yet — silent */ }
   }, []);
 
   const markRead = useCallback((channelUrl: string, messageId: string) => {
-    clientRef.current?.markReadRealtime(channelUrl, messageId);
+    try { clientRef.current?.markReadRealtime(channelUrl, messageId); }
+    catch { /* WS not connected yet — silent */ }
+  }, []);
+
+  const markAsRead = useCallback(async (channelUrl: string) => {
+    try {
+      await clientRef.current?.markAsRead(channelUrl);
+    } catch { /* silent */ }
     setChannels(prev => prev.map(ch =>
       ch.channel_url === channelUrl ? { ...ch, unread_count: 0 } : ch
     ));
+  }, []);
+
+  const replyToThread = useCallback(async (channelUrl: string, messageId: string, body: string) => {
+    if (!clientRef.current) return;
+    try {
+      await clientRef.current.replyToThread(channelUrl, messageId, body);
+      // Refresh the parent message to update thread_reply_count
+      const { data } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      setMessages(prev => ({ ...prev, [channelUrl]: sorted }));
+    } catch (e) {
+      console.error('[Chat] replyToThread failed:', e);
+    }
+  }, []);
+
+  const getThreadReplies = useCallback(async (channelUrl: string, messageId: string): Promise<Message[]> => {
+    if (!clientRef.current) return [];
+    try {
+      const { data } = await clientRef.current.getThreadReplies(channelUrl, messageId);
+      return data;
+    } catch (e) {
+      console.error('[Chat] getThreadReplies failed:', e);
+      return [];
+    }
   }, []);
 
   return (
@@ -290,8 +625,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       channelsLoading,
       messages,
       messagesLoading,
+      hasMoreMessages,
+      hasNewerMessages,
+      loadingOlder,
+      loadingNewer,
       typingUsers,
       loadMessages,
+      loadOlderMessages,
+      loadMessagesAroundUnread,
+      loadNewerMessages,
       sendMessage,
       createGroup,
       startDM,
@@ -302,7 +644,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       startTyping,
       stopTyping,
       markRead,
+      markAsRead,
       refreshChannels,
+      replyToThread,
+      getThreadReplies,
     }}>
       {children}
     </ChatContext.Provider>
