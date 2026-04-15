@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -6,6 +6,7 @@ import {
   Plus, Pencil, Trash2, X, Save, Check, ChevronDown, ChevronRight,
   GripVertical, Eye, Search, ToggleLeft, ToggleRight, Palette, Upload,
   ScrollText, AlignLeft, Hash, CalendarDays, List, Type, UserCog, Users,
+  MapPin, QrCode, DollarSign, Clock, Timer, Hand, Ban, UserCheck,
 } from 'lucide-react';
 import {
   roles, Role, designations, Designation, settingsEventTypes, SettingsEventType,
@@ -14,6 +15,8 @@ import {
   userTypes,
   attendanceRules, attendanceUserTypes, attendancePreferenceLabels, attendanceGeofenceConfig,
   AttendancePreference, AttendanceRule,
+  eventAttendanceConfigs, EventAttendanceConfig, RoleAttendanceConfig,
+  checkInMethodLabels, CheckInMethod,
   reportTypes, ReportTypeConfig, ReportFieldDef, ReportFieldType,
 } from '@/data/settings';
 import { organizations } from '@/data/organizations';
@@ -1443,8 +1446,49 @@ function CrudModal({ title, onClose, fields }: { title: string; onClose: () => v
   );
 }
 
-// ── Attendance Settings ──────────────────────────────────
+// ── Attendance Settings (Tabbed Options) ─────────────────
+type AttendanceOptionTab = 'option-1' | 'option-2' | 'option-3' | 'option-4' | 'option-5';
 function AttendanceSettings() {
+  const [activeOption, setActiveOption] = useState<AttendanceOptionTab>('option-2');
+  const options: { key: AttendanceOptionTab; label: string }[] = [
+    { key: 'option-1', label: 'Option 1' },
+    { key: 'option-2', label: 'Option 2' },
+    { key: 'option-3', label: 'Option 3' },
+    { key: 'option-4', label: 'Option 4' },
+    { key: 'option-5', label: 'Option 5' },
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 bg-dark-50 rounded-lg p-0.5 w-fit">
+        {options.map(o => (
+          <button key={o.key} onClick={() => setActiveOption(o.key)}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${activeOption === o.key ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500 hover:text-dark-700'}`}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {activeOption === 'option-1' && <AttendanceOption1 />}
+      {activeOption === 'option-2' && <AttendanceOption2 />}
+      {activeOption === 'option-3' && <AttendanceOptionPlaceholder n={3} />}
+      {activeOption === 'option-4' && <AttendanceOptionPlaceholder n={4} />}
+      {activeOption === 'option-5' && <AttendanceOptionPlaceholder n={5} />}
+    </div>
+  );
+}
+
+function AttendanceOptionPlaceholder({ n }: { n: number }) {
+  return (
+    <div className="flex items-center justify-center py-20 bg-white border border-dark-100 rounded-xl">
+      <div className="text-center">
+        <p className="text-sm font-bold text-dark-400">Option {n}</p>
+        <p className="text-xs text-dark-300 mt-1">This layout option is reserved for a new design.</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Option 1: Original 3-Matrix Layout ───────────────────
+function AttendanceOption1() {
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [rules, setRules] = useState(attendanceRules);
   const [geoConfig, setGeoConfig] = useState(attendanceGeofenceConfig);
@@ -1769,6 +1813,492 @@ function AttendanceSettings() {
           </div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Option 2: Event-Type-First Drill-Down ────────────────
+function AttendanceOption2() {
+  const [configs, setConfigs] = useState<EventAttendanceConfig[]>(() => JSON.parse(JSON.stringify(eventAttendanceConfigs)));
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingGeoId, setEditingGeoId] = useState<string | null>(null);
+
+  const getEventType = (id: string) => settingsEventTypes.find(e => e.id === id)!;
+
+  const updateConfig = (eventTypeId: string, patch: Partial<EventAttendanceConfig>) => {
+    setConfigs(prev => prev.map(c => c.eventTypeId === eventTypeId ? { ...c, ...patch } : c));
+  };
+
+  const updateRole = (eventTypeId: string, userType: string, patch: Partial<RoleAttendanceConfig>) => {
+    setConfigs(prev => prev.map(c => {
+      if (c.eventTypeId !== eventTypeId) return c;
+      return { ...c, roles: c.roles.map(r => r.userType === userType ? { ...r, ...patch } : r) };
+    }));
+  };
+
+  const methods: CheckInMethod[] = ['manual', 'geolocation', 'qr_code', 'none'];
+  const checkoutReqOptions = ['Attendance', 'Ratings', 'Session RPE', 'Hydration'];
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-bold text-dark-900">Attendance Configuration</h3>
+          <p className="text-xs text-dark-400 mt-0.5">Configure check-in methods, checkout rules, geolocation, and QR per event type.</p>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 bg-dark-50/40 rounded-xl">
+        <span className="text-[10px] font-bold text-dark-400 uppercase tracking-wider mr-1">Methods:</span>
+        {methods.map(m => {
+          const c = checkInMethodLabels[m];
+          return (
+            <div key={m} className="flex items-center gap-1.5">
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${c.bg} ${c.color}`}>{c.short}</span>
+              <span className="text-[10px] text-dark-500">{c.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Summary Table */}
+      <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-dark-50/60 border-b border-dark-100">
+              <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400 w-[200px]">Event Type</th>
+              <th className="text-left px-3 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Check-in Methods</th>
+              <th className="text-center px-3 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Checkout</th>
+              <th className="text-center px-3 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400 w-[60px]"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-dark-100">
+            {configs.map(cfg => {
+              const et = getEventType(cfg.eventTypeId);
+              const isExpanded = expandedId === cfg.eventTypeId;
+              const uniqueMethods = [...new Set(cfg.roles.map(r => r.checkInMethod).filter(m => m !== 'none'))];
+              const checkoutCount = cfg.roles.filter(r => r.requireCheckOut).length;
+
+              return (
+                <React.Fragment key={cfg.eventTypeId}>
+                  {/* Summary row */}
+                  <tr
+                    className={`cursor-pointer transition-colors ${isExpanded ? 'bg-court-50/30' : 'hover:bg-dark-50/30'}`}
+                    onClick={() => setExpandedId(isExpanded ? null : cfg.eventTypeId)}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: et.color }} />
+                        <span className="text-xs font-semibold text-dark-800">{et.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex items-center gap-1.5">
+                        {uniqueMethods.length === 0 ? (
+                          <span className="text-[10px] text-dark-300">No active check-in</span>
+                        ) : (
+                          uniqueMethods.map(m => {
+                            const ml = checkInMethodLabels[m];
+                            return <span key={m} className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${ml.bg} ${ml.color}`}>{ml.short}</span>;
+                          })
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-center">
+                      {checkoutCount > 0 ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-50 text-green-600">{checkoutCount} role{checkoutCount > 1 ? 's' : ''}</span>
+                      ) : (
+                        <span className="text-[10px] text-dark-300">Off</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 text-center">
+                      <motion.div animate={{ rotate: isExpanded ? 90 : 0 }} transition={{ duration: 0.15 }}>
+                        <ChevronRight size={14} className="text-dark-400" />
+                      </motion.div>
+                    </td>
+                  </tr>
+
+                  {/* Expanded Detail */}
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={5} className="p-0">
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="border-t border-dark-100 bg-dark-50/20 px-4 py-4 space-y-4">
+
+                            {/* ── Per-Role Config Table ── */}
+                            <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+                              <div className="px-4 py-2.5 border-b border-dark-100 bg-dark-50/30">
+                                <p className="text-xs font-bold text-dark-700">Role Configuration</p>
+                                <p className="text-[10px] text-dark-400">Set check-in method, default status, and checkout requirement per role</p>
+                              </div>
+                              <div className="overflow-x-auto">
+                                <table className="w-full">
+                                  <thead>
+                                    <tr className="bg-dark-50/40">
+                                      <th className="text-left px-4 py-2.5 text-[10px] font-bold uppercase tracking-wider text-dark-400 w-[120px]">Role</th>
+                                      <th className="text-left px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-dark-400 w-[100px]">Default</th>
+                                      <th className="text-left px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-dark-400 w-[130px]">Check-in</th>
+                                      <th className="text-center px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-dark-400 w-[75px]">QR Role</th>
+                                      <th className="text-center px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-dark-400 w-[85px]">Checkout</th>
+                                      <th className="text-left px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-dark-400">Before Checkout</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-dark-50">
+                                    {cfg.roles.map(role => {
+                                      const isGeoOrQr = role.checkInMethod === 'geolocation' || role.checkInMethod === 'qr_code';
+                                      const isQr = role.checkInMethod === 'qr_code';
+                                      return (
+                                        <tr key={role.userType} className="hover:bg-dark-50/20">
+                                          <td className="px-4 py-2.5">
+                                            <span className="text-xs font-semibold text-dark-800">{role.userType}</span>
+                                          </td>
+                                          {/* Default Status */}
+                                          <td className="px-3 py-2.5">
+                                            <select
+                                              value={role.defaultStatus}
+                                              onChange={e => updateRole(cfg.eventTypeId, role.userType, { defaultStatus: e.target.value as 'absent' | 'present' })}
+                                              className={`h-7 px-2 rounded-lg border text-[10px] font-bold focus:outline-none focus:ring-2 focus:ring-court-500/20 ${
+                                                role.defaultStatus === 'present' ? 'border-green-200 bg-green-50 text-green-600' : 'border-red-200 bg-red-50 text-red-600'
+                                              }`}
+                                            >
+                                              <option value="absent">Absent</option>
+                                              <option value="present">Present</option>
+                                            </select>
+                                          </td>
+                                          {/* Check-in Method */}
+                                          <td className="px-3 py-2.5">
+                                            <select
+                                              value={role.checkInMethod}
+                                              onChange={e => {
+                                                const newMethod = e.target.value as CheckInMethod;
+                                                const patch: Partial<RoleAttendanceConfig> = { checkInMethod: newMethod };
+                                                if (newMethod !== 'qr_code') patch.qrRole = undefined;
+                                                if (newMethod === 'qr_code' && !role.qrRole) patch.qrRole = 'code';
+                                                if (newMethod !== 'geolocation' && newMethod !== 'qr_code') {
+                                                  patch.requireCheckOut = false;
+                                                  patch.checkOutRequirements = [];
+                                                }
+                                                updateRole(cfg.eventTypeId, role.userType, patch);
+                                              }}
+                                              className={`h-7 px-2 rounded-lg border text-[10px] font-bold focus:outline-none focus:ring-2 focus:ring-court-500/20 ${
+                                                checkInMethodLabels[role.checkInMethod].bg
+                                              } ${checkInMethodLabels[role.checkInMethod].color} border-dark-200`}
+                                            >
+                                              {methods.map(m => (
+                                                <option key={m} value={m}>{checkInMethodLabels[m].label}</option>
+                                              ))}
+                                            </select>
+                                          </td>
+                                          {/* QR Role */}
+                                          <td className="px-3 py-2.5 text-center">
+                                            {isQr ? (
+                                              <button
+                                                onClick={() => updateRole(cfg.eventTypeId, role.userType, { qrRole: role.qrRole === 'scanner' ? 'code' : 'scanner' })}
+                                                className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all hover:ring-2 hover:ring-purple-200 ${
+                                                  role.qrRole === 'scanner' ? 'bg-purple-100 text-purple-700' : 'bg-purple-50 text-purple-500'
+                                                }`}
+                                              >
+                                                {role.qrRole === 'scanner' ? 'Scanner' : 'Code'}
+                                              </button>
+                                            ) : (
+                                              <span className="text-[10px] text-dark-300">—</span>
+                                            )}
+                                          </td>
+                                          {/* Checkout Required */}
+                                          <td className="px-3 py-2.5 text-center">
+                                            {isGeoOrQr ? (
+                                              <button
+                                                onClick={() => updateRole(cfg.eventTypeId, role.userType, {
+                                                  requireCheckOut: !role.requireCheckOut,
+                                                  checkOutRequirements: !role.requireCheckOut ? ['Attendance'] : [],
+                                                })}
+                                                className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all hover:ring-2 hover:ring-court-200 ${
+                                                  role.requireCheckOut ? 'bg-green-50 text-green-600' : 'bg-dark-50 text-dark-400'
+                                                }`}
+                                              >
+                                                {role.requireCheckOut ? 'Yes' : 'No'}
+                                              </button>
+                                            ) : (
+                                              <span className="text-[10px] text-dark-300">—</span>
+                                            )}
+                                          </td>
+                                          {/* Before Checkout */}
+                                          <td className="px-3 py-2.5">
+                                            {role.requireCheckOut ? (
+                                              <div className="flex flex-wrap gap-1">
+                                                {checkoutReqOptions.map(opt => {
+                                                  const active = role.checkOutRequirements.includes(opt);
+                                                  return (
+                                                    <button
+                                                      key={opt}
+                                                      onClick={() => {
+                                                        const next = active
+                                                          ? role.checkOutRequirements.filter(x => x !== opt)
+                                                          : [...role.checkOutRequirements, opt];
+                                                        updateRole(cfg.eventTypeId, role.userType, { checkOutRequirements: next });
+                                                      }}
+                                                      className={`px-2 py-0.5 rounded-full text-[9px] font-bold transition-all ${
+                                                        active ? 'bg-court-500 text-white' : 'bg-dark-50 text-dark-400 hover:bg-dark-100'
+                                                      }`}
+                                                    >
+                                                      {opt}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            ) : (
+                                              <span className="text-[10px] text-dark-300">—</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+
+                            {/* ── Event-Level Settings ── */}
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                              {/* Geolocation Settings */}
+                              <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+                                <div className="flex items-center justify-between px-4 py-2.5 border-b border-dark-100 bg-blue-50/30">
+                                  <div className="flex items-center gap-2">
+                                    <MapPin size={13} className="text-blue-600" />
+                                    <p className="text-xs font-bold text-blue-800">Geolocation</p>
+                                  </div>
+                                  <button
+                                    onClick={() => setEditingGeoId(editingGeoId === cfg.eventTypeId ? null : cfg.eventTypeId)}
+                                    className="h-6 px-2 rounded-md border border-dark-200 text-[10px] font-semibold text-dark-600 hover:bg-dark-50 flex items-center gap-1"
+                                  >
+                                    <Pencil size={10} /> {editingGeoId === cfg.eventTypeId ? 'Done' : 'Edit'}
+                                  </button>
+                                </div>
+                                {editingGeoId === cfg.eventTypeId ? (
+                                  <div className="p-4 space-y-3">
+                                    <div>
+                                      <label className="block text-[10px] font-bold uppercase tracking-wider text-dark-400 mb-1">
+                                        1. How far from the venue can participants check in?
+                                      </label>
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="number"
+                                          value={cfg.geolocation.radiusMeters}
+                                          onChange={e => updateConfig(cfg.eventTypeId, { geolocation: { ...cfg.geolocation, radiusMeters: parseInt(e.target.value) || 0 } })}
+                                          className="w-20 h-8 px-2 rounded-lg border border-dark-200 text-xs focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                        />
+                                        <div className="flex rounded-lg border border-dark-200 overflow-hidden">
+                                          {(['m', 'km'] as const).map(u => (
+                                            <button
+                                              key={u}
+                                              onClick={() => updateConfig(cfg.eventTypeId, { geolocation: { ...cfg.geolocation, radiusUnit: u } })}
+                                              className={`px-2.5 py-1 text-[10px] font-bold ${cfg.geolocation.radiusUnit === u ? 'bg-court-500 text-white' : 'bg-white text-dark-500 hover:bg-dark-50'}`}
+                                            >
+                                              {u}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label className="block text-[10px] font-bold uppercase tracking-wider text-dark-400 mb-1">
+                                        2. How early can they check in before the event starts?
+                                      </label>
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="number"
+                                          value={Math.floor(cfg.geolocation.earlyCheckInMinutes / 60)}
+                                          onChange={e => {
+                                            const hrs = parseInt(e.target.value) || 0;
+                                            const mins = cfg.geolocation.earlyCheckInMinutes % 60;
+                                            updateConfig(cfg.eventTypeId, { geolocation: { ...cfg.geolocation, earlyCheckInMinutes: hrs * 60 + mins } });
+                                          }}
+                                          className="w-14 h-8 px-2 rounded-lg border border-dark-200 text-xs text-center focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                        />
+                                        <span className="text-[10px] text-dark-400">hrs</span>
+                                        <input
+                                          type="number"
+                                          value={cfg.geolocation.earlyCheckInMinutes % 60}
+                                          onChange={e => {
+                                            const hrs = Math.floor(cfg.geolocation.earlyCheckInMinutes / 60);
+                                            const mins = parseInt(e.target.value) || 0;
+                                            updateConfig(cfg.eventTypeId, { geolocation: { ...cfg.geolocation, earlyCheckInMinutes: hrs * 60 + mins } });
+                                          }}
+                                          className="w-14 h-8 px-2 rounded-lg border border-dark-200 text-xs text-center focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                        />
+                                        <span className="text-[10px] text-dark-400">mins</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="grid grid-cols-2 gap-3 p-4">
+                                    <div className="p-2.5 bg-dark-50/40 rounded-lg">
+                                      <p className="text-[9px] text-dark-400 uppercase tracking-wider font-bold">Radius</p>
+                                      <p className="text-xs font-bold text-dark-800 mt-0.5">{cfg.geolocation.radiusMeters}{cfg.geolocation.radiusUnit}</p>
+                                    </div>
+                                    <div className="p-2.5 bg-dark-50/40 rounded-lg">
+                                      <p className="text-[9px] text-dark-400 uppercase tracking-wider font-bold">Early Check-in</p>
+                                      <p className="text-xs font-bold text-dark-800 mt-0.5">{cfg.geolocation.earlyCheckInMinutes} min</p>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* QR Code Settings */}
+                              <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+                                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-dark-100 bg-purple-50/30">
+                                  <QrCode size={13} className="text-purple-600" />
+                                  <p className="text-xs font-bold text-purple-800">QR Code</p>
+                                </div>
+                                <div className="p-4 space-y-3">
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-dark-400 mb-1">Check-in opens before event</label>
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="number"
+                                        value={cfg.qrCode.checkInOpensBeforeMinutes}
+                                        onChange={e => updateConfig(cfg.eventTypeId, { qrCode: { ...cfg.qrCode, checkInOpensBeforeMinutes: parseInt(e.target.value) || 0 } })}
+                                        className="w-16 h-8 px-2 rounded-lg border border-dark-200 text-xs text-center focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                      />
+                                      <span className="text-[10px] text-dark-400 font-semibold">minutes</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Penalty & Back-to-Back */}
+                              <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+                                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-dark-100 bg-yellow-50/30">
+                                  <Timer size={13} className="text-yellow-600" />
+                                  <p className="text-xs font-bold text-yellow-800">Penalties & Timing</p>
+                                </div>
+                                <div className="p-4 space-y-3">
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-dark-400 mb-1">When should penalties start after the event ends?</label>
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="number"
+                                        value={Math.floor(cfg.penaltyStartAfterMinutes / 60)}
+                                        onChange={e => {
+                                          const hrs = parseInt(e.target.value) || 0;
+                                          const mins = cfg.penaltyStartAfterMinutes % 60;
+                                          updateConfig(cfg.eventTypeId, { penaltyStartAfterMinutes: hrs * 60 + mins });
+                                        }}
+                                        className="w-14 h-8 px-2 rounded-lg border border-dark-200 text-xs text-center focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                      />
+                                      <span className="text-[10px] text-dark-400">hrs</span>
+                                      <input
+                                        type="number"
+                                        value={cfg.penaltyStartAfterMinutes % 60}
+                                        onChange={e => {
+                                          const hrs = Math.floor(cfg.penaltyStartAfterMinutes / 60);
+                                          const mins = parseInt(e.target.value) || 0;
+                                          updateConfig(cfg.eventTypeId, { penaltyStartAfterMinutes: hrs * 60 + mins });
+                                        }}
+                                        className="w-14 h-8 px-2 rounded-lg border border-dark-200 text-xs text-center focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                      />
+                                      <span className="text-[10px] text-dark-400">mins</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Back-to-back */}
+                              <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+                                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-dark-100 bg-dark-50/30">
+                                  <Calendar size={13} className="text-dark-600" />
+                                  <p className="text-xs font-bold text-dark-700">Back-to-Back Events</p>
+                                </div>
+                                <div className="p-4 space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-dark-700 font-medium">Require new check-in for back-to-back events at same venue?</span>
+                                    <button
+                                      onClick={() => updateConfig(cfg.eventTypeId, { backToBackSameVenue: !cfg.backToBackSameVenue })}
+                                      className="flex items-center gap-1.5"
+                                    >
+                                      <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold border-2 transition-all ${cfg.backToBackSameVenue ? 'border-court-500 bg-court-50 text-court-600' : 'border-dark-200 text-dark-400'}`}>Yes</span>
+                                      <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold border-2 transition-all ${!cfg.backToBackSameVenue ? 'border-court-500 bg-court-50 text-court-600' : 'border-dark-200 text-dark-400'}`}>No</span>
+                                    </button>
+                                  </div>
+                                  {cfg.backToBackSameVenue && (
+                                    <div>
+                                      <label className="block text-[10px] font-bold uppercase tracking-wider text-dark-400 mb-1">Minimum time gap between events</label>
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="number"
+                                          value={Math.floor(cfg.backToBackGapMinutes / 60)}
+                                          onChange={e => {
+                                            const hrs = parseInt(e.target.value) || 0;
+                                            const mins = cfg.backToBackGapMinutes % 60;
+                                            updateConfig(cfg.eventTypeId, { backToBackGapMinutes: hrs * 60 + mins });
+                                          }}
+                                          className="w-14 h-8 px-2 rounded-lg border border-dark-200 text-xs text-center focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                        />
+                                        <span className="text-[10px] text-dark-400">hrs</span>
+                                        <input
+                                          type="number"
+                                          value={cfg.backToBackGapMinutes % 60}
+                                          onChange={e => {
+                                            const hrs = Math.floor(cfg.backToBackGapMinutes / 60);
+                                            const mins = parseInt(e.target.value) || 0;
+                                            updateConfig(cfg.eventTypeId, { backToBackGapMinutes: hrs * 60 + mins });
+                                          }}
+                                          className="w-14 h-8 px-2 rounded-lg border border-dark-200 text-xs text-center focus:outline-none focus:ring-2 focus:ring-court-500/20"
+                                        />
+                                        <span className="text-[10px] text-dark-400">mins</span>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Override Rules */}
+      <div className="bg-white border border-dark-100 rounded-xl p-5">
+        <h4 className="text-sm font-bold text-dark-800 mb-2">Override Rules</h4>
+        <div className="space-y-2">
+          <div className="flex items-start gap-3 p-3 bg-yellow-50/50 rounded-xl border border-yellow-100">
+            <div className="w-6 h-6 rounded-lg bg-yellow-100 flex items-center justify-center shrink-0 mt-0.5">
+              <Shield size={12} className="text-yellow-700" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-dark-800">Manual override requires note</p>
+              <p className="text-[10px] text-dark-500 mt-0.5">When an admin marks a geolocation or QR check-in person as present/absent manually, they must provide a text reason explaining the override.</p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3 p-3 bg-blue-50/50 rounded-xl border border-blue-100">
+            <div className="w-6 h-6 rounded-lg bg-blue-100 flex items-center justify-center shrink-0 mt-0.5">
+              <Eye size={12} className="text-blue-700" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-dark-800">Location required for geolocation events</p>
+              <p className="text-[10px] text-dark-500 mt-0.5">If an event has geolocation check-in configured but no venue location is set, a warning is shown to users with "Set Attendance Preferences" permission.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
     </div>
   );
 }

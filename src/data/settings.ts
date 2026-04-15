@@ -376,3 +376,94 @@ export const attendanceRules: AttendanceRule[] = [
   { eventTypeId: 'set-07', userType: 'Super Admin',  preference: 'present_by_default', requireCheckOut: false },
   { eventTypeId: 'set-07', userType: 'Guest',        preference: 'qr_code',            requireCheckOut: false, qrRole: 'code' },
 ];
+
+// ── NEW Attendance Config Model (event-type-first) ───────────
+export type CheckInMethod = 'manual' | 'geolocation' | 'qr_code' | 'none';
+
+export const checkInMethodLabels: Record<CheckInMethod, { label: string; short: string; color: string; bg: string; icon: string }> = {
+  manual:       { label: 'Manual',             short: 'Manual',  color: 'text-dark-600',   bg: 'bg-dark-100',   icon: '✋' },
+  geolocation:  { label: 'Geolocation',        short: 'Geo',     color: 'text-blue-600',   bg: 'bg-blue-50',    icon: '📍' },
+  qr_code:      { label: 'QR Code',            short: 'QR',      color: 'text-purple-600', bg: 'bg-purple-50',  icon: '📱' },
+  none:         { label: 'No Check-in',        short: 'None',    color: 'text-dark-400',   bg: 'bg-dark-50',    icon: '—' },
+};
+
+export interface RoleAttendanceConfig {
+  userType: AttendanceUserType;
+  defaultStatus: 'absent' | 'present';
+  checkInMethod: CheckInMethod;
+  requireCheckOut: boolean;
+  qrRole?: 'scanner' | 'code';
+  checkOutRequirements: string[];    // e.g. ['attendance', 'ratings']
+  payrollTracked: boolean;
+}
+
+export interface EventGeoConfig {
+  radiusMeters: number;
+  radiusUnit: 'm' | 'km';
+  earlyCheckInMinutes: number;
+}
+
+export interface EventQrConfig {
+  checkInOpensBeforeMinutes: number;
+}
+
+export interface EventAttendanceConfig {
+  eventTypeId: string;
+  roles: RoleAttendanceConfig[];
+  geolocation: EventGeoConfig;
+  qrCode: EventQrConfig;
+  penaltyStartAfterMinutes: number;
+  backToBackSameVenue: boolean;
+  backToBackGapMinutes: number;
+  checkoutRequired: boolean;       // event-level checkout toggle
+}
+
+// Helper: convert old preference to new defaultStatus + checkInMethod
+function migratePreference(pref: AttendancePreference): { defaultStatus: 'absent' | 'present'; checkInMethod: CheckInMethod } {
+  switch (pref) {
+    case 'present_by_default': return { defaultStatus: 'present', checkInMethod: 'none' };
+    case 'absent_by_default':  return { defaultStatus: 'absent',  checkInMethod: 'none' };
+    case 'to_be_marked':       return { defaultStatus: 'absent',  checkInMethod: 'manual' };
+    case 'geolocation':        return { defaultStatus: 'absent',  checkInMethod: 'geolocation' };
+    case 'qr_code':            return { defaultStatus: 'absent',  checkInMethod: 'qr_code' };
+  }
+}
+
+// Build new model from existing attendanceRules
+export const eventAttendanceConfigs: EventAttendanceConfig[] = settingsEventTypes.map(et => {
+  const etRules = attendanceRules.filter(r => r.eventTypeId === et.id);
+  const hasGeo = etRules.some(r => r.preference === 'geolocation');
+  const hasQr = etRules.some(r => r.preference === 'qr_code');
+
+  const roles: RoleAttendanceConfig[] = attendanceUserTypes.map(ut => {
+    const rule = etRules.find(r => r.userType === ut);
+    const { defaultStatus, checkInMethod } = migratePreference(rule?.preference ?? 'to_be_marked');
+    const isStaff = ['Coach', 'Medical', 'Operations'].includes(ut);
+    return {
+      userType: ut,
+      defaultStatus,
+      checkInMethod,
+      requireCheckOut: rule?.requireCheckOut ?? false,
+      qrRole: rule?.qrRole,
+      checkOutRequirements: rule?.requireCheckOut ? ['attendance'] : [],
+      payrollTracked: isStaff,
+    };
+  });
+
+  return {
+    eventTypeId: et.id,
+    roles,
+    geolocation: {
+      radiusMeters: hasGeo ? attendanceGeofenceConfig.radiusMeters : 100,
+      radiusUnit: 'm' as const,
+      earlyCheckInMinutes: hasGeo ? 30 : 15,
+    },
+    qrCode: {
+      checkInOpensBeforeMinutes: hasQr ? 15 : 15,
+    },
+    penaltyStartAfterMinutes: 30,
+    backToBackSameVenue: hasGeo,
+    backToBackGapMinutes: 30,
+    checkoutRequired: etRules.some(r => r.requireCheckOut),
+  };
+});
