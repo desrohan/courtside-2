@@ -18,7 +18,7 @@ interface ChatContextValue {
   messagesLoading: boolean;
   typingUsers: Record<string, string[]>; // channelUrl → list of nicknames typing
   loadMessages: (channelUrl: string) => Promise<void>;
-  sendMessage: (channelUrl: string, body: string, parentMessageId?: string) => Promise<void>;
+  sendMessage: (channelUrl: string, body: string, parentMessageId?: string, files?: File[]) => Promise<void>;
   createGroup: (name: string, supabaseUserIds: string[]) => Promise<ChannelWithUnread | null>;
   startDM: (supabaseUserId: string) => Promise<ChannelWithUnread | null>;
   addReaction: (channelUrl: string, messageId: string, key: string) => void;
@@ -29,6 +29,8 @@ interface ChatContextValue {
   stopTyping: (channelUrl: string) => void;
   markRead: (channelUrl: string, messageId: string) => void;
   refreshChannels: () => Promise<void>;
+  replyToThread: (channelUrl: string, messageId: string, body: string) => Promise<void>;
+  getThreadReplies: (channelUrl: string, messageId: string) => Promise<Message[]>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -226,28 +228,87 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setMessagesLoading(true);
     try {
       const { data } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
-      setMessages(prev => ({ ...prev, [channelUrl]: data }));
+      // Sort ascending by created_at so newest messages are at the bottom
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      setMessages(prev => ({ ...prev, [channelUrl]: sorted }));
     } finally {
       setMessagesLoading(false);
     }
   }, []);
 
-  const sendMessage = useCallback(async (channelUrl: string, body: string, parentMessageId?: string) => {
+  const sendMessage = useCallback(async (channelUrl: string, body: string, parentMessageId?: string, files?: File[]) => {
     if (!clientRef.current) {
       console.error('[Chat] sendMessage: no client connected');
       return;
     }
-    console.log('[Chat] Sending message to', channelUrl, '— body length:', body.length);
+    console.log('[Chat] Sending message to', channelUrl, '— body length:', body.length, 'parentMessageId:', parentMessageId, 'files:', files?.length ?? 0);
+
+    // Upload files to Supabase Storage and build MessageFile objects
+    let uploadedFiles: Array<{ file_url: string; file_name: string; file_type: string; file_size: number }> = [];
+    if (files && files.length > 0) {
+      for (const file of files) {
+        try {
+          const ext = file.name.split('.').pop() || 'bin';
+          const path = `chat/${channelUrl}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+          const { data: uploadData, error } = await supabase.storage
+            .from('chat-files')
+            .upload(path, file, { contentType: file.type, upsert: false });
+          if (error) {
+            console.error('[Chat] File upload failed:', error.message);
+            continue;
+          }
+          const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(uploadData.path);
+          if (urlData.publicUrl) {
+            uploadedFiles.push({
+              file_url: urlData.publicUrl,
+              file_name: file.name,
+              file_type: file.type,
+              file_size: file.size,
+            });
+          }
+        } catch (err) {
+          console.error('[Chat] File upload error:', err);
+        }
+      }
+    }
+
+    const hasFiles = uploadedFiles.length > 0;
+
+    if (!body && !hasFiles) {
+      console.warn('[Chat] Nothing to send — body empty and no files uploaded');
+      return;
+    }
+
+    // If replying to a message, use replyToThread to create/add to a thread
+    if (parentMessageId) {
+      try {
+        await clientRef.current.replyToThread(channelUrl, parentMessageId, body || '(file)');
+        console.log('[Chat] Thread reply sent ✓');
+        const { data } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
+        const sorted = [...data].sort((a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        setMessages(prev => ({ ...prev, [channelUrl]: sorted }));
+      } catch (err) {
+        console.error('[Chat] replyToThread failed:', err);
+      }
+      return;
+    }
+
     try {
-      // Use REST API as primary — it returns the full Message object so we
-      // can add it to local state immediately. The WS onMessage handler
-      // deduplicates by ID, so no double-rendering if the echo also arrives.
-      const msg = await clientRef.current.sendMessage(channelUrl, {
-        body,
-        type: 'user',
-      });
-      console.log('[Chat] REST send succeeded:', msg.id);
-      // Add message to local state immediately
+      // Build params — SDK passes them straight to REST API
+      const params: Record<string, unknown> = {
+        body: body || '',
+        type: hasFiles ? 'file' : 'user',
+      };
+      if (hasFiles) {
+        params.files = uploadedFiles;
+      }
+
+      const msg = await clientRef.current.sendMessage(channelUrl, params as any);
+      console.log('[Chat] REST send succeeded:', msg.id, 'type:', msg.type);
       setMessages(prev => {
         const existing = prev[channelUrl] ?? [];
         if (existing.some(m => m.id === msg.id)) return prev;
@@ -255,15 +316,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
     } catch (err) {
       console.error('[Chat] sendMessage REST failed:', err);
-      // Fallback: try WebSocket send
       try {
         console.log('[Chat] Trying WS fallback…');
-        const ack = await clientRef.current.sendMessageRealtime(channelUrl, body, {
-          parentMessageId,
-        });
+        const ack = await clientRef.current.sendMessageRealtime(channelUrl, body || '(file)', {});
         console.log('[Chat] WS fallback ack:', ack);
         if (ack.ok) {
-          // WS doesn't return the message, reload to fetch it
           const { data } = await clientRef.current!.listMessages(channelUrl, { limit: 50 });
           setMessages(prev => ({ ...prev, [channelUrl]: data }));
         }
@@ -321,14 +378,47 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return channel;
   }, [session, currentOrg, refreshChannels]);
 
-  const addReaction = useCallback((channelUrl: string, messageId: string, key: string) => {
-    try { clientRef.current?.addReactionRealtime(channelUrl, messageId, key); }
-    catch { /* WS not connected yet — silent */ }
+  const addReaction = useCallback(async (channelUrl: string, messageId: string, key: string) => {
+    if (!clientRef.current) return;
+    try {
+      const response = await clientRef.current.addReaction(channelUrl, messageId, key) as any;
+      console.log('[Chat] addReaction response:', JSON.stringify(response));
+      // API returns {ok, message_id, reactions: [{key, count}]} — extract the reactions array
+      const reactionsArray = response?.reactions ?? response;
+      setMessages(prev => {
+        const list = prev[channelUrl];
+        if (!list) return prev;
+        return {
+          ...prev,
+          [channelUrl]: list.map(m =>
+            m.id === messageId ? { ...m, reactions: reactionsArray as Message['reactions'] } : m
+          ),
+        };
+      });
+    } catch (e) {
+      console.warn('[Chat] addReaction failed:', e);
+    }
   }, []);
 
-  const removeReaction = useCallback((channelUrl: string, messageId: string, key: string) => {
-    try { clientRef.current?.removeReactionRealtime(channelUrl, messageId, key); }
-    catch { /* WS not connected yet — silent */ }
+  const removeReaction = useCallback(async (channelUrl: string, messageId: string, key: string) => {
+    if (!clientRef.current) return;
+    try {
+      const response = await clientRef.current.removeReaction(channelUrl, messageId, key) as any;
+      console.log('[Chat] removeReaction response:', JSON.stringify(response));
+      const reactionsArray = response?.reactions ?? response;
+      setMessages(prev => {
+        const list = prev[channelUrl];
+        if (!list) return prev;
+        return {
+          ...prev,
+          [channelUrl]: list.map(m =>
+            m.id === messageId ? { ...m, reactions: reactionsArray as Message['reactions'] } : m
+          ),
+        };
+      });
+    } catch (e) {
+      console.warn('[Chat] removeReaction failed:', e);
+    }
   }, []);
 
   const pinMessage = useCallback(async (channelUrl: string, messageId: string) => {
@@ -361,6 +451,32 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     ));
   }, []);
 
+  const replyToThread = useCallback(async (channelUrl: string, messageId: string, body: string) => {
+    if (!clientRef.current) return;
+    try {
+      await clientRef.current.replyToThread(channelUrl, messageId, body);
+      // Refresh the parent message to update thread_reply_count
+      const { data } = await clientRef.current.listMessages(channelUrl, { limit: 50 });
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      setMessages(prev => ({ ...prev, [channelUrl]: sorted }));
+    } catch (e) {
+      console.error('[Chat] replyToThread failed:', e);
+    }
+  }, []);
+
+  const getThreadReplies = useCallback(async (channelUrl: string, messageId: string): Promise<Message[]> => {
+    if (!clientRef.current) return [];
+    try {
+      const { data } = await clientRef.current.getThreadReplies(channelUrl, messageId);
+      return data;
+    } catch (e) {
+      console.error('[Chat] getThreadReplies failed:', e);
+      return [];
+    }
+  }, []);
+
   return (
     <ChatContext.Provider value={{
       client: clientRef.current,
@@ -382,6 +498,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       stopTyping,
       markRead,
       refreshChannels,
+      replyToThread,
+      getThreadReplies,
     }}>
       {children}
     </ChatContext.Provider>

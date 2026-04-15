@@ -2,10 +2,12 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Plus, Send, Paperclip, Smile, Pin, Reply, Trash2,
-  Users, Phone, Video, Info, X,
-  MessageCircle, FileText, Check,
+  Users, Phone, Video, Info, X, Image as ImageIcon,
+  MessageCircle, FileText, Check, Download,
   ArrowLeft, Loader2,
 } from 'lucide-react';
+import data from '@emoji-mart/data';
+import Picker from '@emoji-mart/react';
 import type { ChannelWithUnread, Message } from '@courtside/chat-sdk';
 import { useChat } from '@/context/ChatContext';
 import { useAuth } from '@/context/AuthContext';
@@ -37,9 +39,7 @@ function channelDisplayName(
   myUserId?: string | null,
 ): string {
   if (ch.name) return ch.name;
-  // Use override from state (e.g. freshly created DM)
   if (dmNamesMap[ch.channel_url]) return dmNamesMap[ch.channel_url];
-  // Read partner name stored in channel data at creation time
   if (ch.type === 'direct' && ch.data?.memberNames && myUserId) {
     const names = ch.data.memberNames as Record<string, string>;
     const other = Object.entries(names).find(([id]) => id !== myUserId);
@@ -48,16 +48,382 @@ function channelDisplayName(
   return 'Direct Message';
 }
 
+function isImageFile(name: string) {
+  return /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(name);
+}
+
+function isVideoFile(name: string) {
+  return /\.(mp4|webm|mov|avi|mkv)$/i.test(name);
+}
+
+// ─── Emoji Picker Popover ─────────────────────────────
+function EmojiPopover({
+  onSelect,
+  onClose,
+  anchorRef,
+  position = 'top',
+}: {
+  onSelect: (emoji: string) => void;
+  onClose: () => void;
+  anchorRef?: React.RefObject<HTMLElement | null>;
+  position?: 'top' | 'bottom';
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (anchorRef?.current) {
+      const rect = anchorRef.current.getBoundingClientRect();
+      const pickerWidth = 352;
+      const pickerHeight = 435;
+      let left = rect.left;
+      // Keep within viewport horizontally
+      if (left + pickerWidth > window.innerWidth - 8) left = window.innerWidth - pickerWidth - 8;
+      if (left < 8) left = 8;
+      if (position === 'top') {
+        const bottom = window.innerHeight - rect.top + 4;
+        // If it would go above viewport, flip to below
+        if (bottom + pickerHeight > window.innerHeight - 8) {
+          setCoords({ top: Math.max(8, rect.bottom + 4), left });
+        } else {
+          setCoords({ bottom, left });
+        }
+      } else {
+        const top = rect.bottom + 4;
+        if (top + pickerHeight > window.innerHeight - 8) {
+          setCoords({ bottom: Math.max(8, window.innerHeight - rect.top + 4), left });
+        } else {
+          setCoords({ top, left });
+        }
+      }
+    }
+  }, [anchorRef, position]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  // If no anchor provided, fall back to absolute positioning
+  const style: React.CSSProperties = coords
+    ? { position: 'fixed', ...coords, zIndex: 9999 }
+    : {};
+  const className = coords
+    ? ''
+    : `absolute z-50 ${position === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'}`;
+
+  return (
+    <div ref={ref} className={className} style={style}>
+      <Picker
+        data={data}
+        onEmojiSelect={(e: any) => { onSelect(e.native); onClose(); }}
+        theme="light"
+        previewPosition="none"
+        skinTonePosition="none"
+        set="native"
+        maxFrequentRows={1}
+        perLine={8}
+      />
+    </div>
+  );
+}
+
+// ─── Quick Reaction Bar ───────────────────────────────
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉'];
+
+function ReactionPicker({
+  onSelect,
+  onClose,
+  onOpenFull,
+  mine = false,
+}: {
+  onSelect: (emoji: string) => void;
+  onClose: () => void;
+  onOpenFull: () => void;
+  mine?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  return (
+    <div ref={ref} className={`absolute bottom-full mb-1 z-50 ${mine ? 'right-0' : 'left-0'}`}>
+      <div className="flex items-center gap-0.5 bg-white rounded-xl shadow-lg border border-dark-100 px-1.5 py-1">
+        {QUICK_REACTIONS.map(emoji => (
+          <button key={emoji} onClick={() => { onSelect(emoji); onClose(); }}
+            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-dark-50 text-base transition-colors">
+            {emoji}
+          </button>
+        ))}
+        <button onClick={onOpenFull}
+          className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-dark-50 text-dark-400 transition-colors">
+          <Plus size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Thread Panel ─────────────────────────────────────
+function ThreadPanel({
+  channelUrl,
+  parentMessage,
+  chatUserId,
+  onClose,
+}: {
+  channelUrl: string;
+  parentMessage: Message;
+  chatUserId: string | null;
+  onClose: () => void;
+}) {
+  const { getThreadReplies, replyToThread } = useChat();
+  const [replies, setReplies] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [replyText, setReplyText] = useState('');
+  const [sending, setSending] = useState(false);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    getThreadReplies(channelUrl, parentMessage.id)
+      .then(d => {
+        const sorted = [...d].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        setReplies(sorted);
+      })
+      .finally(() => setLoading(false));
+  }, [channelUrl, parentMessage.id, getThreadReplies]);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [replies.length]);
+
+  const handleSendReply = async () => {
+    if (!replyText.trim() || sending) return;
+    setSending(true);
+    await replyToThread(channelUrl, parentMessage.id, replyText.trim());
+    setReplyText('');
+    const d = await getThreadReplies(channelUrl, parentMessage.id);
+    const sorted = [...d].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    setReplies(sorted);
+    setSending(false);
+  };
+
+  const senderName = parentMessage.sender?.nickname ?? 'Unknown';
+
+  return (
+    <motion.div initial={{ width: 0, opacity: 0 }} animate={{ width: 360, opacity: 1 }} exit={{ width: 0, opacity: 0 }}
+      className="border-l border-dark-100 overflow-hidden shrink-0">
+      <div className="w-[360px] h-full flex flex-col">
+        <div className="px-4 py-3 border-b border-dark-100 flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="text-sm font-bold text-dark-900">Thread</h3>
+            <p className="text-[11px] text-dark-400">{replies.length} replies</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-dark-50 text-dark-400"><X size={14} /></button>
+        </div>
+
+        <div className="px-4 py-3 bg-dark-50/50 border-b border-dark-100 shrink-0">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-court-400 to-court-600 flex items-center justify-center">
+              <span className="text-[8px] font-bold text-white">{userInitials(senderName)}</span>
+            </div>
+            <span className="text-xs font-semibold text-dark-700">{senderName}</span>
+            <span className="text-[10px] text-dark-400">{formatMsgTime(parentMessage.created_at)}</span>
+          </div>
+          <p className="text-sm text-dark-700 whitespace-pre-wrap">{parentMessage.body}</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          {loading ? (
+            <div className="flex justify-center py-8"><Loader2 size={16} className="text-dark-300 animate-spin" /></div>
+          ) : replies.length === 0 ? (
+            <p className="text-xs text-dark-400 text-center py-6">No replies yet</p>
+          ) : (
+            replies.map(reply => {
+              const rName = reply.sender?.nickname ?? 'Unknown';
+              const rMine = reply.sender?.user_id === chatUserId;
+              return (
+                <div key={reply.id} className="flex gap-2">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-court-400 to-court-600 flex items-center justify-center shrink-0 mt-0.5">
+                    {reply.sender?.profile_url ? (
+                      <img src={reply.sender.profile_url} alt="" className="w-full h-full rounded-full object-cover" />
+                    ) : (
+                      <span className="text-[8px] font-bold text-white">{userInitials(rName)}</span>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-dark-700">{rMine ? 'You' : rName}</span>
+                      <span className="text-[10px] text-dark-400">{formatMsgTime(reply.created_at)}</span>
+                    </div>
+                    <p className="text-sm text-dark-700 mt-0.5 whitespace-pre-wrap">{reply.body}</p>
+                  </div>
+                </div>
+              );
+            })
+          )}
+          <div ref={endRef} />
+        </div>
+
+        <div className="px-4 py-3 border-t border-dark-100 shrink-0">
+          <div className="flex items-end gap-2">
+            <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendReply(); } }}
+              placeholder="Reply…" rows={1}
+              className="flex-1 px-3 py-2 rounded-xl bg-dark-50 border border-dark-100 text-sm focus:outline-none focus:ring-2 focus:ring-court-500/20 resize-none max-h-20" />
+            <button onClick={handleSendReply} disabled={!replyText.trim() || sending}
+              className="p-2 rounded-xl bg-court-500 text-white hover:bg-court-600 disabled:opacity-40 transition-colors shrink-0">
+              <Send size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── File Preview (before sending) ────────────────────
+function FilePreviewBar({ files, onRemove }: { files: File[]; onRemove: (i: number) => void }) {
+  if (files.length === 0) return null;
+  return (
+    <div className="px-5 py-2 border-t border-dark-100 flex gap-2 overflow-x-auto">
+      {files.map((file, i) => {
+        const isImg = isImageFile(file.name);
+        return (
+          <div key={i} className="relative group shrink-0">
+            {isImg ? (
+              <img src={URL.createObjectURL(file)} alt={file.name}
+                className="w-16 h-16 rounded-lg object-cover border border-dark-100" />
+            ) : (
+              <div className="w-16 h-16 rounded-lg border border-dark-100 bg-dark-50 flex flex-col items-center justify-center">
+                <FileText size={18} className="text-dark-400" />
+                <p className="text-[8px] text-dark-400 mt-0.5 truncate max-w-[56px]">{file.name}</p>
+              </div>
+            )}
+            <button onClick={() => onRemove(i)}
+              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+              <X size={10} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── URL detection helpers ────────────────────────────
+const IMAGE_URL_RE = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp|svg|bmp)(?:\?\S*)?/gi;
+const VIDEO_URL_RE = /https?:\/\/\S+\.(?:mp4|webm|mov|avi|mkv)(?:\?\S*)?/gi;
+
+function extractMediaUrls(body: string | null): { imageUrls: string[]; videoUrls: string[]; textParts: string[] } {
+  if (!body) return { imageUrls: [], videoUrls: [], textParts: [] };
+  const imageUrls = body.match(IMAGE_URL_RE) ?? [];
+  const videoUrls = body.match(VIDEO_URL_RE) ?? [];
+  const allMediaUrls = new Set([...imageUrls, ...videoUrls]);
+  const textParts = body.split('\n').filter(line => !allMediaUrls.has(line.trim())).filter(Boolean);
+  return { imageUrls, videoUrls, textParts };
+}
+
+// ─── Message Bubble with inline file/image preview ────
+function MessageBubble({ msg, mine }: { msg: Message; mine: boolean }) {
+  const hasFiles = msg.files && msg.files.length > 0;
+
+  // Detect image/video URLs in the message body
+  const { imageUrls, videoUrls, textParts } = extractMediaUrls(msg.body);
+  const hasMediaUrls = imageUrls.length > 0 || videoUrls.length > 0;
+
+  if (hasFiles) {
+    return (
+      <div className="space-y-1.5">
+        {msg.files!.map((file: any, fi: number) => {
+          if (isImageFile(file.file_name)) {
+            return (
+              <div key={fi} className={`rounded-2xl overflow-hidden border ${mine ? 'border-court-200' : 'border-dark-100'} max-w-xs`}>
+                <img src={file.file_url || file.url} alt={file.file_name} className="max-w-full max-h-60 object-contain bg-dark-50" loading="lazy" />
+                <div className={`flex items-center justify-between px-3 py-1.5 ${mine ? 'bg-court-50' : 'bg-dark-50'}`}>
+                  <p className="text-[10px] text-dark-500 truncate">{file.file_name}</p>
+                  <a href={file.file_url || file.url} target="_blank" rel="noopener noreferrer" className="text-dark-400 hover:text-dark-600"><Download size={12} /></a>
+                </div>
+              </div>
+            );
+          }
+          if (isVideoFile(file.file_name)) {
+            return (
+              <div key={fi} className={`rounded-2xl overflow-hidden border ${mine ? 'border-court-200' : 'border-dark-100'} max-w-xs`}>
+                <video src={file.file_url || file.url} controls className="max-w-full max-h-60" />
+                <div className={`flex items-center justify-between px-3 py-1.5 ${mine ? 'bg-court-50' : 'bg-dark-50'}`}>
+                  <p className="text-[10px] text-dark-500 truncate">{file.file_name}</p>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={fi} className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border ${mine ? 'bg-court-50 border-court-100' : 'bg-dark-50 border-dark-100'}`}>
+              <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shadow-sm shrink-0">
+                <FileText size={18} className="text-dark-400" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-dark-800 truncate">{file.file_name}</p>
+                <p className="text-[10px] text-dark-400">{Math.round(file.file_size / 1024)} KB</p>
+              </div>
+              <a href={file.file_url || file.url} target="_blank" rel="noopener noreferrer" className="text-dark-400 hover:text-dark-600 shrink-0"><Download size={14} /></a>
+            </div>
+          );
+        })}
+        {msg.body && (
+          <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+            mine ? 'bg-court-500 text-white rounded-tr-md' : 'bg-dark-50 text-dark-800 rounded-tl-md'
+          }`}>{msg.body}</div>
+        )}
+      </div>
+    );
+  }
+
+  // Render image/video URLs detected in the body as inline previews
+  if (hasMediaUrls) {
+    return (
+      <div className="space-y-1.5">
+        {imageUrls.map((url, i) => (
+          <div key={`img-${i}`} className={`rounded-2xl overflow-hidden border ${mine ? 'border-court-200' : 'border-dark-100'} max-w-xs`}>
+            <img src={url} alt="" className="max-w-full max-h-60 object-contain bg-dark-50" loading="lazy" />
+            <div className={`flex items-center justify-between px-3 py-1.5 ${mine ? 'bg-court-50' : 'bg-dark-50'}`}>
+              <p className="text-[10px] text-dark-500 truncate">Image</p>
+              <a href={url} target="_blank" rel="noopener noreferrer" className="text-dark-400 hover:text-dark-600"><Download size={12} /></a>
+            </div>
+          </div>
+        ))}
+        {videoUrls.map((url, i) => (
+          <div key={`vid-${i}`} className={`rounded-2xl overflow-hidden border ${mine ? 'border-court-200' : 'border-dark-100'} max-w-xs`}>
+            <video src={url} controls className="max-w-full max-h-60" />
+          </div>
+        ))}
+        {textParts.length > 0 && (
+          <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+            mine ? 'bg-court-500 text-white rounded-tr-md' : 'bg-dark-50 text-dark-800 rounded-tl-md'
+          }`}>{textParts.join('\n')}</div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+      mine ? 'bg-court-500 text-white rounded-tr-md' : 'bg-dark-50 text-dark-800 rounded-tl-md'
+    }`}>{msg.body}</div>
+  );
+}
+
 // ─── Create Group Dialog ──────────────────────────────
 function CreateGroupDialog({
-  onClose,
-  users,
-  onSubmit,
-}: {
-  onClose: () => void;
-  users: OrgUser[];
-  onSubmit: (name: string, userIds: string[]) => Promise<void>;
-}) {
+  onClose, users, onSubmit,
+}: { onClose: () => void; users: OrgUser[]; onSubmit: (name: string, userIds: string[]) => Promise<void> }) {
   const [name, setName] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
@@ -142,35 +508,26 @@ export default function ChatModule() {
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [inputText, setInputText] = useState('');
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [threadParent, setThreadParent] = useState<Message | null>(null);
   const [orgUsers, setOrgUsers] = useState<OrgUser[]>([]);
   const [dmNamesMap, setDmNamesMap] = useState<Record<string, string>>({});
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
+  const [fullEmojiForMsgId, setFullEmojiForMsgId] = useState<string | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const emojiAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const inputEmojiRef = useRef<HTMLButtonElement>(null);
 
   const activeChannel = channels.find(c => c.channel_url === activeChannelUrl) ?? null;
   const activeMessages = activeChannelUrl ? (messages[activeChannelUrl] ?? []) : [];
   const totalUnread = channels.reduce((sum, ch) => sum + ch.unread_count, 0);
 
-  // Refresh channel list whenever the chat page mounts or the client connects
-  useEffect(() => {
-    if (client) {
-      refreshChannels();
-    }
-  }, [client, refreshChannels]);
-
-  // Load messages when channel is selected
-  useEffect(() => {
-    if (activeChannelUrl) {
-      loadMessages(activeChannelUrl);
-    }
-  }, [activeChannelUrl, loadMessages]);
-
-  // Auto-scroll
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeChannelUrl, activeMessages.length]);
-
-  // Mark as read when viewing messages
+  useEffect(() => { if (client) refreshChannels(); }, [client, refreshChannels]);
+  useEffect(() => { if (activeChannelUrl) loadMessages(activeChannelUrl); }, [activeChannelUrl, loadMessages]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [activeChannelUrl, activeMessages.length]);
   useEffect(() => {
     if (activeChannelUrl && activeMessages.length > 0) {
       const lastMsg = activeMessages[activeMessages.length - 1];
@@ -178,7 +535,6 @@ export default function ChatModule() {
     }
   }, [activeChannelUrl, activeMessages.length, markRead]);
 
-  // Fetch org members for the Users tab and group creation
   useEffect(() => {
     if (!currentOrg || !session) return;
     async function fetchOrgUsers() {
@@ -187,27 +543,25 @@ export default function ChatModule() {
       });
       if (!res.ok) return;
       const data: Array<{ id: string; name: string; email: string; avatar_url: string | null; role: string }> = await res.json();
-      setOrgUsers(
-        data
-          .filter(u => u.id !== user?.id)
-          .map(u => ({
-            id: u.id,
-            name: u.name,
-            avatar: u.name.split(' ').map((w: string) => w[0] ?? '').join('').toUpperCase().slice(0, 2) || '??',
-            email: u.email,
-          }))
-      );
+      setOrgUsers(data.filter(u => u.id !== user?.id).map(u => ({
+        id: u.id, name: u.name,
+        avatar: u.name.split(' ').map((w: string) => w[0] ?? '').join('').toUpperCase().slice(0, 2) || '??',
+        email: u.email,
+      })));
     }
     fetchOrgUsers();
   }, [currentOrg, session, user?.id]);
 
+  useEffect(() => { setThreadParent(null); setReplyTo(null); }, [activeChannelUrl]);
+
   const handleSend = useCallback(() => {
-    if (!inputText.trim() || !activeChannelUrl) return;
-    sendChatMessage(activeChannelUrl, inputText.trim(), replyTo?.id);
+    if ((!inputText.trim() && pendingFiles.length === 0) || !activeChannelUrl) return;
+    sendChatMessage(activeChannelUrl, inputText.trim(), replyTo?.id, pendingFiles.length > 0 ? pendingFiles : undefined);
     setInputText('');
     setReplyTo(null);
+    setPendingFiles([]);
     if (activeChannelUrl) stopTyping(activeChannelUrl);
-  }, [inputText, activeChannelUrl, replyTo, sendChatMessage, stopTyping]);
+  }, [inputText, pendingFiles, activeChannelUrl, replyTo, sendChatMessage, stopTyping]);
 
   const handleInputChange = useCallback((value: string) => {
     setInputText(value);
@@ -215,9 +569,7 @@ export default function ChatModule() {
     if (value.trim()) {
       startTyping(activeChannelUrl);
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = setTimeout(() => {
-        if (activeChannelUrl) stopTyping(activeChannelUrl);
-      }, 3000);
+      typingTimerRef.current = setTimeout(() => { if (activeChannelUrl) stopTyping(activeChannelUrl); }, 3000);
     } else {
       stopTyping(activeChannelUrl);
     }
@@ -226,11 +578,8 @@ export default function ChatModule() {
   const handleStartDM = useCallback(async (userId: string) => {
     const channel = await startDM(userId);
     if (channel) {
-      // Immediately resolve the display name for this new DM
       const targetUser = orgUsers.find(u => u.id === userId);
-      if (targetUser) {
-        setDmNamesMap(prev => ({ ...prev, [channel.channel_url]: targetUser.name }));
-      }
+      if (targetUser) setDmNamesMap(prev => ({ ...prev, [channel.channel_url]: targetUser.name }));
       setActiveChannelUrl(channel.channel_url);
       setNavTab('chats');
     }
@@ -238,17 +587,15 @@ export default function ChatModule() {
 
   const handleCreateGroup = useCallback(async (name: string, userIds: string[]) => {
     const channel = await createGroup(name, userIds);
-    if (channel) {
-      setActiveChannelUrl(channel.channel_url);
-    }
+    if (channel) setActiveChannelUrl(channel.channel_url);
   }, [createGroup]);
 
-  // Resolve DM channel names for channels where ch.data.memberNames is missing
-  // (created before this patch) by falling back to the dmNamesMap state.
-  // For channels created after this patch the server stores names in ch.data.
-  useEffect(() => {
-    // nothing extra needed — dmNamesMap is populated by handleStartDM for new DMs
-    // and by ch.data.memberNames for existing ones
+  const handleFileSelect = useCallback(() => { fileInputRef.current?.click(); }, []);
+
+  const handleFilesChosen = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length > 0) setPendingFiles(prev => [...prev, ...files]);
+    e.target.value = '';
   }, []);
 
   const filteredChannels = channels.filter(ch => {
@@ -256,13 +603,9 @@ export default function ChatModule() {
     return !search || name.toLowerCase().includes(search.toLowerCase());
   });
 
-  const filteredUsers = orgUsers.filter(u =>
-    !search || u.name.toLowerCase().includes(search.toLowerCase())
-  );
-
+  const filteredUsers = orgUsers.filter(u => !search || u.name.toLowerCase().includes(search.toLowerCase()));
   const isMe = (msg: Message) => msg.sender?.user_id === chatUserId;
 
-  // ─── Loading state ──────────────────────────
   if (!client) {
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -278,27 +621,19 @@ export default function ChatModule() {
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="h-[calc(100vh-120px)] flex rounded-2xl border border-dark-100 bg-white overflow-hidden shadow-card">
 
-      {/* ─── LEFT NAV ─────────────────────────────── */}
+      {/* LEFT NAV */}
       <div className={`w-80 border-r border-dark-100 flex flex-col shrink-0 ${activeChannelUrl ? 'hidden lg:flex' : 'flex'}`}>
         <div className="p-4 border-b border-dark-100">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-base font-bold text-dark-900">Chat</h2>
             <div className="flex items-center gap-1">
-              {totalUnread > 0 && (
-                <span className="px-1.5 py-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full">{totalUnread}</span>
-              )}
-              <button onClick={() => setShowCreateGroup(true)} className="p-1.5 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700">
-                <Plus size={16} />
-              </button>
+              {totalUnread > 0 && <span className="px-1.5 py-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full">{totalUnread}</span>}
+              <button onClick={() => setShowCreateGroup(true)} className="p-1.5 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700"><Plus size={16} /></button>
             </div>
           </div>
           <div className="flex gap-1 bg-dark-50 rounded-lg p-0.5 mb-3">
-            <button onClick={() => setNavTab('chats')} className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all ${navTab === 'chats' ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500'}`}>
-              Chats
-            </button>
-            <button onClick={() => setNavTab('users')} className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all ${navTab === 'users' ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500'}`}>
-              Users
-            </button>
+            <button onClick={() => setNavTab('chats')} className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all ${navTab === 'chats' ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500'}`}>Chats</button>
+            <button onClick={() => setNavTab('users')} className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all ${navTab === 'users' ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500'}`}>Users</button>
           </div>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400" />
@@ -310,9 +645,7 @@ export default function ChatModule() {
         <div className="flex-1 overflow-y-auto">
           {navTab === 'chats' ? (
             channelsLoading && channels.length === 0 ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 size={18} className="text-dark-300 animate-spin" />
-              </div>
+              <div className="flex items-center justify-center py-12"><Loader2 size={18} className="text-dark-300 animate-spin" /></div>
             ) : filteredChannels.length === 0 ? (
               <p className="text-xs text-dark-400 text-center py-8">No conversations yet</p>
             ) : (
@@ -335,12 +668,8 @@ export default function ChatModule() {
                         {ch.last_message_at && <span className="text-[10px] text-dark-400 shrink-0 ml-2">{formatMsgTime(ch.last_message_at)}</span>}
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
-                        <p className={`text-xs truncate ${ch.unread_count > 0 ? 'text-dark-600' : 'text-dark-400'}`}>
-                          {ch.member_count} members
-                        </p>
-                        {ch.unread_count > 0 && (
-                          <span className="ml-2 w-5 h-5 rounded-full bg-court-500 text-white text-[10px] font-bold flex items-center justify-center shrink-0">{ch.unread_count}</span>
-                        )}
+                        <p className={`text-xs truncate ${ch.unread_count > 0 ? 'text-dark-600' : 'text-dark-400'}`}>{ch.member_count} members</p>
+                        {ch.unread_count > 0 && <span className="ml-2 w-5 h-5 rounded-full bg-court-500 text-white text-[10px] font-bold flex items-center justify-center shrink-0">{ch.unread_count}</span>}
                       </div>
                     </div>
                   </button>
@@ -368,29 +697,24 @@ export default function ChatModule() {
         </div>
       </div>
 
-      {/* ─── MAIN CHAT AREA ───────────────────────── */}
+      {/* MAIN CHAT AREA */}
       {activeChannel ? (
         <div className="flex-1 flex flex-col min-w-0">
           <div className="h-16 px-5 flex items-center justify-between border-b border-dark-100 shrink-0">
             <div className="flex items-center gap-3">
-              <button onClick={() => setActiveChannelUrl(null)} className="lg:hidden p-1.5 rounded-lg hover:bg-dark-50 text-dark-400 mr-1">
-                <ArrowLeft size={16} />
-              </button>
+              <button onClick={() => setActiveChannelUrl(null)} className="lg:hidden p-1.5 rounded-lg hover:bg-dark-50 text-dark-400 mr-1"><ArrowLeft size={16} /></button>
               <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-xs ${
                 activeChannel.type === 'group' ? 'bg-gradient-to-br from-court-400 to-court-700' : 'bg-gradient-to-br from-court-400 to-court-600'
               }`}>
                 {activeChannel.type === 'group' || activeChannel.type === 'super_group'
-                  ? <Users size={15} />
-                  : userInitials(channelDisplayName(activeChannel, dmNamesMap, user?.id))}
+                  ? <Users size={15} /> : userInitials(channelDisplayName(activeChannel, dmNamesMap, user?.id))}
               </div>
               <div>
                 <p className="text-sm font-bold text-dark-900">{channelDisplayName(activeChannel, dmNamesMap, user?.id)}</p>
                 <p className="text-[11px] text-dark-400">
                   {activeChannel.member_count} members
                   {typingUsers[activeChannel.channel_url]?.length > 0 && (
-                    <span className="text-court-500 ml-1">
-                      · {typingUsers[activeChannel.channel_url].join(', ')} typing…
-                    </span>
+                    <span className="text-court-500 ml-1">· {typingUsers[activeChannel.channel_url].join(', ')} typing…</span>
                   )}
                 </p>
               </div>
@@ -398,29 +722,24 @@ export default function ChatModule() {
             <div className="flex items-center gap-1">
               <button className="p-2 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700"><Phone size={16} /></button>
               <button className="p-2 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700"><Video size={16} /></button>
-              <button onClick={() => setShowInfo(!showInfo)} className={`p-2 rounded-lg transition-colors ${showInfo ? 'bg-court-50 text-court-600' : 'hover:bg-dark-50 text-dark-400 hover:text-dark-700'}`}>
-                <Info size={16} />
-              </button>
+              <button onClick={() => setShowInfo(!showInfo)} className={`p-2 rounded-lg transition-colors ${showInfo ? 'bg-court-50 text-court-600' : 'hover:bg-dark-50 text-dark-400 hover:text-dark-700'}`}><Info size={16} /></button>
             </div>
           </div>
 
           <div className="flex flex-1 overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0">
-              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
                 {messagesLoading && activeMessages.length === 0 ? (
-                  <div className="flex items-center justify-center py-12">
-                    <Loader2 size={18} className="text-dark-300 animate-spin" />
-                  </div>
+                  <div className="flex items-center justify-center py-12"><Loader2 size={18} className="text-dark-300 animate-spin" /></div>
                 ) : activeMessages.length === 0 ? (
-                  <div className="flex items-center justify-center py-12">
-                    <p className="text-xs text-dark-400">No messages yet. Say hello!</p>
-                  </div>
+                  <div className="flex items-center justify-center py-12"><p className="text-xs text-dark-400">No messages yet. Say hello!</p></div>
                 ) : (
                   activeMessages.map((msg, i) => {
                     const mine = isMe(msg);
                     const senderName = msg.sender?.nickname ?? 'Unknown';
                     const senderInit = userInitials(senderName);
                     const showAvatar = i === 0 || activeMessages[i - 1].sender?.user_id !== msg.sender?.user_id;
+
                     return (
                       <div key={msg.id} className={`flex gap-2.5 group ${mine ? 'flex-row-reverse' : ''}`}>
                         {showAvatar ? (
@@ -432,56 +751,72 @@ export default function ChatModule() {
                             )}
                           </div>
                         ) : <div className="w-8 shrink-0" />}
-                        <div className={`max-w-[65%] ${mine ? 'items-end' : 'items-start'}`}>
+
+                        {/* Name + message bubble with side actions + reactions */}
+                        <div className={`flex flex-col max-w-[65%] ${mine ? 'items-end' : 'items-start'}`}>
                           {showAvatar && (
                             <div className={`flex items-center gap-2 mb-0.5 ${mine ? 'justify-end' : ''}`}>
                               <span className="text-xs font-semibold text-dark-700">{mine ? 'You' : senderName}</span>
                               <span className="text-[10px] text-dark-400">{formatMsgTime(msg.created_at)}</span>
                             </div>
                           )}
-                          {msg.files && msg.files.length > 0 ? (
-                            <div className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border ${mine ? 'bg-court-50 border-court-100' : 'bg-dark-50 border-dark-100'}`}>
-                              <div className="w-9 h-9 rounded-lg bg-white flex items-center justify-center shadow-sm shrink-0">
-                                <FileText size={18} className="text-dark-400" />
+
+                          {/* Bubble + hover actions row, vertically centered */}
+                          <div className={`flex items-center gap-1 ${mine ? '' : 'flex-row-reverse'}`}>
+                            {/* Hover actions */}
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 relative">
+                              <div className="relative">
+                                <button ref={el => { if (fullEmojiForMsgId === msg.id || reactionPickerMsgId === msg.id) emojiAnchorRef.current = el; }}
+                                  onClick={() => setReactionPickerMsgId(reactionPickerMsgId === msg.id ? null : msg.id)}
+                                  className="p-1 rounded hover:bg-dark-100 text-dark-400" title="React"><Smile size={13} /></button>
+                                {reactionPickerMsgId === msg.id && !fullEmojiForMsgId && (
+                                  <ReactionPicker
+                                    mine={mine}
+                                    onSelect={emoji => addReaction(activeChannel.channel_url, msg.id, emoji)}
+                                    onClose={() => setReactionPickerMsgId(null)}
+                                    onOpenFull={() => setFullEmojiForMsgId(msg.id)}
+                                  />
+                                )}
+                                {fullEmojiForMsgId === msg.id && (
+                                  <EmojiPopover
+                                    anchorRef={emojiAnchorRef}
+                                    onSelect={emoji => { addReaction(activeChannel.channel_url, msg.id, emoji); setFullEmojiForMsgId(null); setReactionPickerMsgId(null); }}
+                                    onClose={() => { setFullEmojiForMsgId(null); setReactionPickerMsgId(null); }}
+                                  />
+                                )}
                               </div>
-                              <div className="min-w-0">
-                                <p className="text-xs font-semibold text-dark-800 truncate">{msg.files[0].file_name}</p>
-                                <p className="text-[10px] text-dark-400">{Math.round(msg.files[0].file_size / 1024)} KB</p>
-                              </div>
+                              <button onClick={() => setReplyTo(msg)} className="p-1 rounded hover:bg-dark-100 text-dark-400" title="Reply"><Reply size={13} /></button>
+                              <button onClick={() => pinMessage(activeChannel.channel_url, msg.id)} className="p-1 rounded hover:bg-dark-100 text-dark-400" title="Pin"><Pin size={13} /></button>
+                              {mine && <button className="p-1 rounded hover:bg-red-50 text-dark-400 hover:text-red-500" title="Delete"><Trash2 size={13} /></button>}
                             </div>
-                          ) : (
-                            <div className={`px-3.5 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                              mine ? 'bg-court-500 text-white rounded-tr-md' : 'bg-dark-50 text-dark-800 rounded-tl-md'
-                            }`}>
-                              {msg.body}
-                            </div>
-                          )}
+
+                            {/* Bubble */}
+                            <MessageBubble msg={msg} mine={mine} />
+                          </div>
+
                           {msg.reactions && msg.reactions.length > 0 && (
-                            <div className="flex gap-1 mt-1">
-                              {msg.reactions.map((r, ri) => (
-                                <button key={ri}
-                                  onClick={() => {
-                                    const myReaction = r.users.some(u => u.user_id === chatUserId);
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {msg.reactions.map((r: any, ri: number) => {
+                                const myReaction = r.users ? r.users.some((u: any) => u.user_id === chatUserId) : false;
+                                return (
+                                  <button key={ri} onClick={() => {
                                     if (myReaction) removeReaction(activeChannel.channel_url, msg.id, r.key);
                                     else addReaction(activeChannel.channel_url, msg.id, r.key);
-                                  }}
-                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-white border border-dark-100 rounded-full text-[11px] cursor-pointer hover:border-court-300">
-                                  {r.key} <span className="text-dark-500 font-medium">{r.count}</span>
-                                </button>
-                              ))}
+                                  }} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] cursor-pointer border transition-colors ${
+                                    myReaction ? 'bg-court-50 border-court-300 text-court-700' : 'bg-white border-dark-100 hover:border-court-300'
+                                  }`}>
+                                    {r.key} <span className="font-medium">{r.count}</span>
+                                  </button>
+                                );
+                              })}
                             </div>
                           )}
                           {msg.thread_reply_count > 0 && (
-                            <button className="flex items-center gap-1 mt-1 text-[11px] font-semibold text-court-500 hover:underline">
-                              <Reply size={11} /> {msg.thread_reply_count} replies
+                            <button onClick={() => setThreadParent(msg)}
+                              className="flex items-center gap-1 mt-1 text-[11px] font-semibold text-court-500 hover:underline">
+                              <MessageCircle size={11} /> {msg.thread_reply_count} replies
                             </button>
                           )}
-                          <div className={`flex items-center gap-0.5 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity ${mine ? 'justify-end' : ''}`}>
-                            <button onClick={() => addReaction(activeChannel.channel_url, msg.id, '👍')} className="p-1 rounded hover:bg-dark-100 text-dark-400"><Smile size={12} /></button>
-                            <button onClick={() => setReplyTo(msg)} className="p-1 rounded hover:bg-dark-100 text-dark-400"><Reply size={12} /></button>
-                            <button onClick={() => pinMessage(activeChannel.channel_url, msg.id)} className="p-1 rounded hover:bg-dark-100 text-dark-400"><Pin size={12} /></button>
-                            {mine && <button className="p-1 rounded hover:bg-red-50 text-dark-400 hover:text-red-500"><Trash2 size={12} /></button>}
-                          </div>
                         </div>
                       </div>
                     );
@@ -498,30 +833,38 @@ export default function ChatModule() {
                 </div>
               )}
 
+              <FilePreviewBar files={pendingFiles} onRemove={i => setPendingFiles(prev => prev.filter((_, idx) => idx !== i))} />
+              <input ref={fileInputRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" className="hidden" onChange={handleFilesChosen} />
+
               <div className="px-5 py-3 border-t border-dark-100 shrink-0">
-                <div className="flex items-end gap-2">
-                  <button className="p-2 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700 shrink-0"><Paperclip size={18} /></button>
+                <div className="flex items-center gap-2">
+                  <button onClick={handleFileSelect} className="p-2 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700 shrink-0"><Paperclip size={18} /></button>
                   <div className="flex-1 relative">
-                    <textarea
-                      value={inputText}
-                      onChange={e => handleInputChange(e.target.value)}
+                    <textarea value={inputText} onChange={e => handleInputChange(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                      placeholder="Type a message..."
-                      rows={1}
-                      className="w-full px-4 py-2.5 rounded-xl bg-dark-50 border border-dark-100 text-sm focus:outline-none focus:ring-2 focus:ring-court-500/20 focus:border-court-500/30 focus:bg-white resize-none max-h-24"
-                    />
+                      placeholder="Type a message..." rows={1}
+                      className="w-full px-4 py-2.5 rounded-xl bg-dark-50 border border-dark-100 text-sm focus:outline-none focus:ring-2 focus:ring-court-500/20 focus:border-court-500/30 focus:bg-white resize-none max-h-24" />
                   </div>
-                  <button className="p-2 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700 shrink-0"><Smile size={18} /></button>
-                  <button onClick={handleSend} disabled={!inputText.trim()}
-                    className="p-2.5 rounded-xl bg-court-500 text-white hover:bg-court-600 disabled:opacity-40 transition-colors shrink-0">
-                    <Send size={16} />
-                  </button>
+                  <div className="relative shrink-0">
+                    <button ref={inputEmojiRef} onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700"><Smile size={18} /></button>
+                    {showEmojiPicker && (
+                      <EmojiPopover position="top" anchorRef={inputEmojiRef} onSelect={emoji => setInputText(prev => prev + emoji)} onClose={() => setShowEmojiPicker(false)} />
+                    )}
+                  </div>
+                  <button onClick={handleSend} disabled={!inputText.trim() && pendingFiles.length === 0}
+                    className="p-2.5 rounded-xl bg-court-500 text-white hover:bg-court-600 disabled:opacity-40 transition-colors shrink-0"><Send size={16} /></button>
                 </div>
               </div>
             </div>
 
             <AnimatePresence>
-              {showInfo && (
+              {threadParent && activeChannelUrl && (
+                <ThreadPanel channelUrl={activeChannelUrl} parentMessage={threadParent} chatUserId={chatUserId} onClose={() => setThreadParent(null)} />
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+              {showInfo && !threadParent && (
                 <motion.div initial={{ width: 0, opacity: 0 }} animate={{ width: 280, opacity: 1 }} exit={{ width: 0, opacity: 0 }}
                   className="border-l border-dark-100 overflow-hidden shrink-0">
                   <div className="w-[280px] h-full overflow-y-auto">
@@ -544,9 +887,7 @@ export default function ChatModule() {
                         <div className="space-y-1.5">
                           {activeMessages.filter(m => m.files && m.files.length > 0).map(m => (
                             <div key={m.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-dark-50 cursor-pointer">
-                              <div className="w-7 h-7 rounded bg-red-50 flex items-center justify-center shrink-0">
-                                <FileText size={13} className="text-red-500" />
-                              </div>
+                              <div className="w-7 h-7 rounded bg-red-50 flex items-center justify-center shrink-0"><FileText size={13} className="text-red-500" /></div>
                               <div className="min-w-0">
                                 <p className="text-[11px] font-medium text-dark-700 truncate">{m.files![0].file_name}</p>
                                 <p className="text-[10px] text-dark-400">{Math.round(m.files![0].file_size / 1024)} KB</p>
@@ -565,9 +906,7 @@ export default function ChatModule() {
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="w-16 h-16 rounded-2xl bg-court-50 flex items-center justify-center mx-auto mb-4">
-              <MessageCircle size={28} className="text-court-400" />
-            </div>
+            <div className="w-16 h-16 rounded-2xl bg-court-50 flex items-center justify-center mx-auto mb-4"><MessageCircle size={28} className="text-court-400" /></div>
             <h3 className="text-lg font-bold text-dark-800 mb-1">Your messages</h3>
             <p className="text-sm text-dark-400 max-w-xs">Select a conversation or start a new chat with a team member.</p>
           </div>
@@ -575,13 +914,7 @@ export default function ChatModule() {
       )}
 
       <AnimatePresence>
-        {showCreateGroup && (
-          <CreateGroupDialog
-            onClose={() => setShowCreateGroup(false)}
-            users={orgUsers}
-            onSubmit={handleCreateGroup}
-          />
-        )}
+        {showCreateGroup && <CreateGroupDialog onClose={() => setShowCreateGroup(false)} users={orgUsers} onSubmit={handleCreateGroup} />}
       </AnimatePresence>
     </motion.div>
   );

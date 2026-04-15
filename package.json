@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@courtside/chat-sdk": "^0.0.1",
+    "@emoji-mart/data": "^1.2.1",
+    "@emoji-mart/react": "^1.1.1",
     "@fullcalendar/core": "^6.1.15",
     "@fullcalendar/daygrid": "^6.1.15",
     "@fullcalendar/interaction": "^6.1.15",
@@ -22,6 +24,7 @@
     "@tiptap/react": "^3.22.2",
     "@tiptap/starter-kit": "^3.22.2",
     "date-fns": "^3.6.0",
+    "emoji-mart": "^5.6.0",
     "framer-motion": "^11.0.0",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
