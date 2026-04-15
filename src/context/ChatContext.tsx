@@ -17,10 +17,14 @@ interface ChatContextValue {
   messages: Record<string, Message[]>;
   messagesLoading: boolean;
   hasMoreMessages: Record<string, boolean>;
+  hasNewerMessages: Record<string, boolean>;
   loadingOlder: boolean;
+  loadingNewer: boolean;
   typingUsers: Record<string, string[]>; // channelUrl → list of nicknames typing
   loadMessages: (channelUrl: string) => Promise<void>;
   loadOlderMessages: (channelUrl: string) => Promise<void>;
+  loadMessagesAroundUnread: (channelUrl: string, unreadCount: number) => Promise<{ dividerIndex: number }>;
+  loadNewerMessages: (channelUrl: string) => Promise<void>;
   sendMessage: (channelUrl: string, body: string, parentMessageId?: string, files?: File[]) => Promise<void>;
   createGroup: (name: string, supabaseUserIds: string[]) => Promise<ChannelWithUnread | null>;
   startDM: (supabaseUserId: string) => Promise<ChannelWithUnread | null>;
@@ -51,7 +55,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
   const [paginationCursors, setPaginationCursors] = useState<Record<string, string | null>>({});
   const [hasMoreMessages, setHasMoreMessages] = useState<Record<string, boolean>>({});
+  const [hasNewerMessages, setHasNewerMessages] = useState<Record<string, boolean>>({});
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [loadingNewer, setLoadingNewer] = useState(false);
+  const forwardCursorsRef = useRef<Record<string, string | null>>({});
 
   // ── Chat token + connect ─────────────────────────────
   useEffect(() => {
@@ -243,6 +250,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       paginationCursorsRef.current = { ...paginationCursorsRef.current, [channelUrl]: pagination?.prev_cursor ?? null };
       setPaginationCursors(prev => ({ ...prev, [channelUrl]: pagination?.prev_cursor ?? null }));
       setHasMoreMessages(prev => ({ ...prev, [channelUrl]: pagination?.has_more ?? false }));
+      // We loaded the latest page — nothing newer exists
+      forwardCursorsRef.current = { ...forwardCursorsRef.current, [channelUrl]: null };
+      setHasNewerMessages(prev => ({ ...prev, [channelUrl]: false }));
     } finally {
       setMessagesLoading(false);
     }
@@ -280,6 +290,87 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setLoadingOlder(false);
     }
   }, []);
+
+  // Batch-load enough messages to cover unreadCount + context, commit state once
+  const loadMessagesAroundUnread = useCallback(async (channelUrl: string, unreadCount: number): Promise<{ dividerIndex: number }> => {
+    if (!clientRef.current) return { dividerIndex: 0 };
+    setMessagesLoading(true);
+    try {
+      const targetTotal = unreadCount + 20; // 20 messages of read context above divider
+      const allMessages: Message[] = [];
+      let cursor: string | undefined = undefined;
+      let hasMore = true;
+
+      while (allMessages.length < targetTotal && hasMore) {
+        const opts: Record<string, unknown> = { limit: 50 };
+        if (cursor) opts.before = cursor;
+        const { data, pagination } = await clientRef.current!.listMessages(channelUrl, opts as any);
+        const sorted = [...data].sort((a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        // Prepend older messages
+        allMessages.unshift(...sorted);
+        cursor = pagination?.prev_cursor ?? undefined;
+        hasMore = pagination?.has_more ?? false;
+      }
+
+      // Deduplicate by id (in case of overlaps)
+      const seen = new Set<string>();
+      const deduped = allMessages.filter(m => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+
+      // Sort ascending
+      deduped.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+      // Single state commit
+      setMessages(prev => ({ ...prev, [channelUrl]: deduped }));
+      paginationCursorsRef.current = { ...paginationCursorsRef.current, [channelUrl]: cursor ?? null };
+      setPaginationCursors(prev => ({ ...prev, [channelUrl]: cursor ?? null }));
+      setHasMoreMessages(prev => ({ ...prev, [channelUrl]: hasMore }));
+      // We loaded up to the newest — nothing newer exists
+      forwardCursorsRef.current = { ...forwardCursorsRef.current, [channelUrl]: null };
+      setHasNewerMessages(prev => ({ ...prev, [channelUrl]: false }));
+
+      const dividerIndex = Math.max(0, deduped.length - unreadCount);
+      return { dividerIndex };
+    } finally {
+      setMessagesLoading(false);
+    }
+  }, []);
+
+  // Load newer messages (forward pagination) for when user is mid-history
+  const loadNewerMessages = useCallback(async (channelUrl: string) => {
+    if (!clientRef.current) return;
+    const msgs = messages[channelUrl] ?? [];
+    if (msgs.length === 0) return;
+
+    setLoadingNewer(true);
+    try {
+      // Use the newest loaded message's created_at as the after cursor
+      const newestMsg = msgs[msgs.length - 1];
+      const { data, pagination } = await clientRef.current.listMessages(channelUrl, {
+        limit: 50,
+        after: newestMsg.created_at,
+      } as any);
+      const sorted = [...data].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      // Append newer messages
+      setMessages(prev => {
+        const existing = prev[channelUrl] ?? [];
+        const existingIds = new Set(existing.map(m => m.id));
+        const newMsgs = sorted.filter(m => !existingIds.has(m.id));
+        return { ...prev, [channelUrl]: [...existing, ...newMsgs] };
+      });
+      const moreNewer = pagination?.has_more ?? false;
+      setHasNewerMessages(prev => ({ ...prev, [channelUrl]: moreNewer }));
+    } finally {
+      setLoadingNewer(false);
+    }
+  }, [messages]);
 
   const sendMessage = useCallback(async (channelUrl: string, body: string, parentMessageId?: string, files?: File[]) => {
     if (!clientRef.current) {
@@ -535,10 +626,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       messages,
       messagesLoading,
       hasMoreMessages,
+      hasNewerMessages,
       loadingOlder,
+      loadingNewer,
       typingUsers,
       loadMessages,
       loadOlderMessages,
+      loadMessagesAroundUnread,
+      loadNewerMessages,
       sendMessage,
       createGroup,
       startDM,

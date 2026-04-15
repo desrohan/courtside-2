@@ -491,8 +491,11 @@ export default function ChatModule() {
     channels, channelsLoading,
     messages, messagesLoading,
     hasMoreMessages, loadingOlder,
+    hasNewerMessages, loadingNewer,
     typingUsers,
-    loadMessages, loadOlderMessages, sendMessage: sendChatMessage,
+    loadMessages, loadOlderMessages,
+    loadMessagesAroundUnread, loadNewerMessages,
+    sendMessage: sendChatMessage,
     createGroup, startDM,
     addReaction, removeReaction,
     pinMessage,
@@ -519,6 +522,8 @@ export default function ChatModule() {
   const [unreadDividerIndex, setUnreadDividerIndex] = useState<number | null>(null);
   const [showUnreadBadge, setShowUnreadBadge] = useState(false);
   const [capturedUnreadCount, setCapturedUnreadCount] = useState(0);
+  const [viewMode, setViewMode] = useState<'latest' | 'unread-jump'>('latest');
+  const [jumpLoading, setJumpLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const unreadDividerRef = useRef<HTMLDivElement>(null);
   const unreadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -541,6 +546,8 @@ export default function ChatModule() {
 
   // Scroll to bottom on channel switch or when new messages are added at the end (not on prepend of older)
   useEffect(() => {
+    // Don't auto-scroll to bottom when user is viewing mid-history
+    if (viewMode === 'unread-jump') return;
     const channelChanged = prevChannelRef.current !== activeChannelUrl;
     const lastMsgId = activeMessages.length > 0 ? activeMessages[activeMessages.length - 1].id : null;
     const newMessageAtEnd = lastMsgId !== prevLastMsgIdRef.current && prevLastMsgIdRef.current !== null;
@@ -549,7 +556,7 @@ export default function ChatModule() {
     }
     prevLastMsgIdRef.current = lastMsgId;
     prevChannelRef.current = activeChannelUrl;
-  }, [activeChannelUrl, activeMessages]);
+  }, [activeChannelUrl, activeMessages, viewMode]);
 
   // Capture unread count when switching channels (before it gets cleared)
   useEffect(() => {
@@ -558,6 +565,8 @@ export default function ChatModule() {
     const count = ch?.unread_count ?? 0;
     setCapturedUnreadCount(count);
     dividerPlacedRef.current = null; // reset for new channel
+    setViewMode('latest');
+    setJumpLoading(false);
     if (count > 0) {
       setShowUnreadBadge(true);
     } else {
@@ -574,21 +583,19 @@ export default function ChatModule() {
     if (!activeChannelUrl || capturedUnreadCount === 0 || activeMessages.length === 0) return;
     // Only place divider once per channel open
     if (dividerPlacedRef.current === activeChannelUrl) return;
-    const dividerIdx = activeMessages.length - capturedUnreadCount;
-    if (dividerIdx > 0) {
-      setUnreadDividerIndex(dividerIdx);
+
+    if (capturedUnreadCount <= activeMessages.length) {
+      // All unread messages fit within the loaded page — place divider inline
+      const dividerIdx = activeMessages.length - capturedUnreadCount;
+      setUnreadDividerIndex(dividerIdx > 0 ? dividerIdx : 0);
       dividerPlacedRef.current = activeChannelUrl;
     } else {
-      // All loaded messages are unread. Place divider at 0.
-      setUnreadDividerIndex(0);
-      // If there are more pages, auto-load to reveal the divider boundary
-      if (capturedUnreadCount > activeMessages.length && hasMoreMessages[activeChannelUrl] && !loadingOlder) {
-        loadOlderMessages(activeChannelUrl);
-        return; // don't mark as placed yet — will re-run after older messages load
-      }
-      dividerPlacedRef.current = activeChannelUrl;
+      // More unread than loaded messages — DON'T auto-load in a loop.
+      // Just show badge; user clicks it to batch-jump.
+      setUnreadDividerIndex(null);
+      dividerPlacedRef.current = activeChannelUrl; // mark as handled
     }
-  }, [activeChannelUrl, activeMessages.length, capturedUnreadCount, hasMoreMessages, loadingOlder, loadOlderMessages]);
+  }, [activeChannelUrl, activeMessages.length, capturedUnreadCount]);
 
   // Mark as read only when divider stays visible for 3 seconds continuously
   useEffect(() => {
@@ -680,14 +687,51 @@ export default function ChatModule() {
 
   const handleFileSelect = useCallback(() => { fileInputRef.current?.click(); }, []);
 
-  const scrollToUnread = useCallback(() => {
-    unreadDividerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, []);
+  const handleJumpToUnread = useCallback(async () => {
+    if (!activeChannelUrl) return;
+
+    if (capturedUnreadCount <= 50 && unreadDividerRef.current) {
+      // Divider is already in the DOM, just scroll to it
+      unreadDividerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    // More unread than one page — batch-load all unread + context in one go
+    setJumpLoading(true);
+    try {
+      const { dividerIndex } = await loadMessagesAroundUnread(activeChannelUrl, capturedUnreadCount);
+      setUnreadDividerIndex(dividerIndex);
+      setViewMode('unread-jump');
+      // Scroll to divider after render
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          unreadDividerRef.current?.scrollIntoView({ behavior: 'auto', block: 'center' });
+        }, 50);
+      });
+    } finally {
+      setJumpLoading(false);
+    }
+  }, [activeChannelUrl, capturedUnreadCount, loadMessagesAroundUnread]);
+
+  const jumpToLatest = useCallback(async () => {
+    if (!activeChannelUrl) return;
+    setViewMode('latest');
+    setUnreadDividerIndex(null);
+    setShowUnreadBadge(false);
+    await loadMessages(activeChannelUrl);
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    });
+    markAsRead(activeChannelUrl);
+  }, [activeChannelUrl, loadMessages, markAsRead]);
 
   // Infinite scroll: load older messages when user scrolls to top
   const loadOlderSentinelRef = useRef<HTMLDivElement>(null);
+  const loadNewerSentinelRef = useRef<HTMLDivElement>(null);
   const loadingOlderRef = useRef(false);
+  const loadingNewerRef = useRef(false);
   loadingOlderRef.current = loadingOlder;
+  loadingNewerRef.current = loadingNewer;
 
   useEffect(() => {
     const sentinel = loadOlderSentinelRef.current;
@@ -710,6 +754,25 @@ export default function ChatModule() {
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [activeChannelUrl, loadOlderMessages]);
+
+  // Bottom sentinel: load newer messages when user scrolls to bottom in unread-jump mode
+  useEffect(() => {
+    const sentinel = loadNewerSentinelRef.current;
+    const container = scrollContainerRef.current;
+    if (!sentinel || !container || !activeChannelUrl || viewMode !== 'unread-jump') return;
+    if (!hasNewerMessages[activeChannelUrl]) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !loadingNewerRef.current) {
+          loadNewerMessages(activeChannelUrl);
+        }
+      },
+      { root: container, threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [activeChannelUrl, viewMode, hasNewerMessages, loadNewerMessages]);
 
   const handleFilesChosen = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -849,15 +912,35 @@ export default function ChatModule() {
             <div className="flex-1 flex flex-col min-w-0 relative">
               {/* Sticky unread badge */}
               <AnimatePresence>
-                {showUnreadBadge && unreadDividerIndex !== null && capturedUnreadCount > 0 && (
+                {showUnreadBadge && capturedUnreadCount > 0 && (
                   <motion.button
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
-                    onClick={scrollToUnread}
-                    className="absolute top-2 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 bg-red-500 text-white text-xs font-semibold rounded-full shadow-lg hover:bg-red-600 transition-colors cursor-pointer"
+                    onClick={handleJumpToUnread}
+                    disabled={jumpLoading}
+                    className="absolute top-2 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 bg-red-500 text-white text-xs font-semibold rounded-full shadow-lg hover:bg-red-600 transition-colors cursor-pointer disabled:opacity-70"
                   >
-                    {capturedUnreadCount} unread message{capturedUnreadCount !== 1 ? 's' : ''} ↑
+                    {jumpLoading ? (
+                      <span className="flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Loading…</span>
+                    ) : (
+                      <>{capturedUnreadCount} unread message{capturedUnreadCount !== 1 ? 's' : ''} ↑</>
+                    )}
+                  </motion.button>
+                )}
+              </AnimatePresence>
+
+              {/* Jump to latest button (shown when viewing mid-history) */}
+              <AnimatePresence>
+                {viewMode === 'unread-jump' && (
+                  <motion.button
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    onClick={jumpToLatest}
+                    className="absolute bottom-20 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 bg-court-500 text-white text-xs font-semibold rounded-full shadow-lg hover:bg-court-600 transition-colors cursor-pointer"
+                  >
+                    ↓ Jump to latest
                   </motion.button>
                 )}
               </AnimatePresence>
@@ -973,6 +1056,13 @@ export default function ChatModule() {
                     );
                   })
                 )}
+                {/* Bottom sentinel for forward pagination in unread-jump mode */}
+                {viewMode === 'unread-jump' && loadingNewer && (
+                  <div className="flex justify-center py-2">
+                    <Loader2 size={16} className="text-dark-300 animate-spin" />
+                  </div>
+                )}
+                <div ref={loadNewerSentinelRef} className="shrink-0" />
                 <div ref={messagesEndRef} />
               </div>
 
