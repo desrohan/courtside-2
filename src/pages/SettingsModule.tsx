@@ -25,10 +25,12 @@ import {
   getFormulaDisplay,
 } from '@/data/statDefinitions';
 import GovernanceSection from '@/components/governance/GovernanceSection';
+import { seasons, Season } from '@/data/seasons';
+import { settingsActivities as activities } from '@/data/settings';
 
 type SettingsSection = 'account' | 'resources' | 'governance';
 type AccountTab = 'organization' | 'roles' | 'designations';
-type ResourceTab = 'event-types' | 'facilities' | 'tags' | 'activity' | 'stats' | 'attendance' | 'report-types';
+type ResourceTab = 'event-types' | 'facilities' | 'tags' | 'activity' | 'stats' | 'attendance' | 'report-types' | 'seasons';
 
 export default function SettingsModule() {
   const location = useLocation();
@@ -329,6 +331,7 @@ function ResourceSection({ tab, setTab }: { tab: ResourceTab; setTab: (t: Resour
           { key: 'stats' as ResourceTab, label: 'Stats' },
           { key: 'attendance' as ResourceTab, label: 'Attendance' },
           { key: 'report-types' as ResourceTab, label: 'Report Types' },
+          { key: 'seasons' as ResourceTab, label: 'Seasons' },
         ]).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${tab === t.key ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500'}`}>{t.label}</button>
@@ -341,6 +344,7 @@ function ResourceSection({ tab, setTab }: { tab: ResourceTab; setTab: (t: Resour
       {tab === 'stats' && <StatsSettings />}
       {tab === 'attendance' && <AttendanceSettings />}
       {tab === 'report-types' && <ReportTypesSettings />}
+      {tab === 'seasons' && <SeasonsSettings />}
     </div>
   );
 }
@@ -1379,6 +1383,149 @@ function ReportTypeModal({ item, onClose, onSave }: {
           />
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Seasons ──────────────────────────────────────────
+function SeasonsSettings() {
+  const [showModal, setShowModal] = useState(false);
+  const [editItem, setEditItem] = useState<Season | null>(null);
+  const [localSeasons, setLocalSeasons] = useState<Season[]>(seasons);
+
+  const statusColors: Record<string, string> = {
+    active: 'bg-green-50 text-green-600',
+    upcoming: 'bg-blue-50 text-blue-600',
+    completed: 'bg-dark-50 text-dark-400',
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <button onClick={() => { setEditItem(null); setShowModal(true); }} className="h-8 px-3 rounded-lg bg-court-500 text-white text-xs font-semibold hover:bg-court-600 flex items-center gap-1.5"><Plus size={14} /> Create Season</button>
+      </div>
+      {activities.map(act => {
+        const actSeasons = localSeasons.filter(s => s.activityId === act.id);
+        if (actSeasons.length === 0) return null;
+        return (
+          <div key={act.id} className="bg-white rounded-xl border border-dark-100 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-dark-100">
+              <h3 className="text-sm font-bold text-dark-800">{act.name}</h3>
+              <span className="text-xs text-dark-400">{actSeasons.length} season{actSeasons.length !== 1 ? 's' : ''}</span>
+            </div>
+            <table className="w-full">
+              <thead><tr className="bg-dark-50/60">
+                <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Season</th>
+                <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Start Date</th>
+                <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">End Date</th>
+                <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Status</th>
+                <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Actions</th>
+              </tr></thead>
+              <tbody className="divide-y divide-dark-100">
+                {actSeasons.map(s => (
+                  <tr key={s.id} className="hover:bg-dark-50/30">
+                    <td className="px-4 py-3"><span className="text-sm font-semibold text-dark-800">{s.name}</span></td>
+                    <td className="px-4 py-3 text-xs text-dark-500">{new Date(s.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                    <td className="px-4 py-3 text-xs text-dark-500">{new Date(s.endDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                    <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize ${statusColors[s.status] || ''}`}>{s.status}</span></td>
+                    <td className="px-4 py-3"><div className="flex gap-1">
+                      <button onClick={() => { setEditItem(s); setShowModal(true); }} className="p-1.5 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700"><Pencil size={14} /></button>
+                      <button className="p-1.5 rounded-lg hover:bg-red-50 text-dark-400 hover:text-red-500"><Trash2 size={14} /></button>
+                    </div></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+      <AnimatePresence>{showModal && <SeasonModal item={editItem} onClose={() => { setShowModal(false); setEditItem(null); }} onSave={(s) => {
+        if (editItem) {
+          setLocalSeasons(prev => prev.map(x => x.id === s.id ? s : x));
+        } else {
+          setLocalSeasons(prev => [...prev, s]);
+        }
+        setShowModal(false); setEditItem(null);
+      }} />}</AnimatePresence>
+    </div>
+  );
+}
+
+function SeasonModal({ item, onClose, onSave }: { item: Season | null; onClose: () => void; onSave: (s: Season) => void }) {
+  const [activityId, setActivityId] = useState(item?.activityId || 'act-football');
+  const [startDate, setStartDate] = useState(item?.startDate || '');
+  const [name, setName] = useState(item?.name || '');
+  const [status, setStatus] = useState<Season['status']>(item?.status || 'upcoming');
+
+  const actName = activities.find(a => a.id === activityId)?.name || '';
+
+  const endDate = startDate ? (() => {
+    const d = new Date(startDate);
+    d.setFullYear(d.getFullYear() + 1);
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  })() : '';
+
+  const autoName = startDate ? (() => {
+    const y1 = new Date(startDate).getFullYear();
+    const y2 = y1 + 1;
+    return `${actName}-Season-${y1}/${String(y2).slice(2)}`;
+  })() : '';
+
+  return (
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={onClose}>
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+        onClick={e => e.stopPropagation()} className="bg-white rounded-2xl shadow-elevated w-full max-w-md overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-dark-100">
+          <h3 className="text-base font-bold text-dark-900">{item ? 'Edit Season' : 'Create Season'}</h3>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-dark-50 text-dark-400"><X size={16} /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-dark-400 mb-1">Activity *</label>
+            <select value={activityId} onChange={e => setActivityId(e.target.value)} className="w-full h-9 px-3 rounded-lg border border-dark-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-court-500/20">
+              {activities.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-dark-400 mb-1">Start Date *</label>
+            <input type="date" value={startDate} onChange={e => { setStartDate(e.target.value); if (!item) setName(''); }}
+              className="w-full h-9 px-3 rounded-lg border border-dark-200 text-sm focus:outline-none focus:ring-2 focus:ring-court-500/20" />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-dark-400 mb-1">End Date (auto-calculated)</label>
+            <input type="date" value={endDate} disabled className="w-full h-9 px-3 rounded-lg border border-dark-200 text-sm bg-dark-50 text-dark-400 cursor-not-allowed" />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-dark-400 mb-1">Name</label>
+            <input value={name || autoName} onChange={e => setName(e.target.value)}
+              className="w-full h-9 px-3 rounded-lg border border-dark-200 text-sm focus:outline-none focus:ring-2 focus:ring-court-500/20" />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-dark-400 mb-1">Status</label>
+            <div className="flex gap-2">
+              {(['upcoming', 'active', 'completed'] as const).map(s => (
+                <button key={s} onClick={() => setStatus(s)}
+                  className={`flex-1 h-8 rounded-lg text-[11px] font-bold capitalize transition-all ${status === s ? 'bg-court-500 text-white' : 'bg-dark-50 text-dark-500 hover:bg-dark-100'}`}>{s}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-dark-100">
+          <button onClick={onClose} className="h-9 px-4 rounded-xl border border-dark-200 text-sm font-medium text-dark-600 hover:bg-dark-50">Cancel</button>
+          <button onClick={() => {
+            if (!startDate) return;
+            onSave({
+              id: item?.id || `sea-${Date.now()}`,
+              name: name || autoName,
+              activityId,
+              startDate,
+              endDate,
+              status,
+            });
+          }} className="h-9 px-5 rounded-xl bg-court-500 text-white text-sm font-semibold hover:bg-court-600 flex items-center gap-2"><Save size={15} /> Save</button>
+        </div>
+      </motion.div>
     </div>
   );
 }

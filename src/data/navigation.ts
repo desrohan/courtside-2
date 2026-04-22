@@ -44,6 +44,7 @@ export const getNavigation = (orgId: string): NavSection[] => [
         ],
       },
       { title: 'Scheduler', path: `/o/${orgId}/schedule/calendar`, icon: 'calendar', permission: ['View Event'] },
+      { title: 'Planner', path: `/o/${orgId}/planner`, icon: 'gantt-chart', permission: ['View Event'] },
       {
         title: 'Forms',
         path: `/o/${orgId}/form`,

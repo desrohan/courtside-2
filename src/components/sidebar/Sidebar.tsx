@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Home, HelpCircle, User, UserCheck, Users, Calendar,
   FileText, Target, MessageCircle, Settings, ChevronDown, ChevronLeft,
-  ChevronRight, Hexagon, Trophy,
+  ChevronRight, Hexagon, Trophy, GanttChart,
 } from 'lucide-react';
 import { getNavigation, NavItem, NavSection } from '@/data/navigation';
 
@@ -20,6 +20,7 @@ const iconMap: Record<string, React.ReactNode> = {
   'target': <Target size={20} />,
   'message-circle': <MessageCircle size={20} />,
   'trophy': <Trophy size={20} />,
+  'gantt-chart': <GanttChart size={20} />,
   'settings': <Settings size={20} />,
 };
 

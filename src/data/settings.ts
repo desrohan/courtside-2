@@ -260,6 +260,28 @@ export const settingsActivities: SettingsActivity[] = [
   { id: 'act-football', name: 'Football', linkedEventTypeIds: ['set-01', 'set-02', 'set-03', 'set-04', 'set-05', 'set-06', 'set-07'] },
 ];
 
+// ── Activity Attributes ───────────────────────────────
+export interface ActivityAttribute {
+  id: string;
+  name: string;
+  activityId: string;
+}
+
+export const activityAttributes: ActivityAttribute[] = [
+  { id: 'attr-01', name: 'Dribbling', activityId: 'act-football' },
+  { id: 'attr-02', name: 'Shooting', activityId: 'act-football' },
+  { id: 'attr-03', name: 'Passing', activityId: 'act-football' },
+  { id: 'attr-04', name: 'Defending', activityId: 'act-football' },
+  { id: 'attr-05', name: 'Tackling', activityId: 'act-football' },
+  { id: 'attr-06', name: 'Set Pieces', activityId: 'act-football' },
+  { id: 'attr-07', name: 'Fitness', activityId: 'act-football' },
+  { id: 'attr-08', name: 'Tactical Awareness', activityId: 'act-football' },
+  { id: 'attr-09', name: 'Positioning', activityId: 'act-football' },
+  { id: 'attr-10', name: 'Crossing', activityId: 'act-football' },
+  { id: 'attr-11', name: 'Heading', activityId: 'act-football' },
+  { id: 'attr-12', name: 'Ball Control', activityId: 'act-football' },
+];
+
 // ── User Types ────────────────────────────────────────
 export const userTypes = ['General Admin', 'Coach', 'Medical', 'Athlete', 'Operations', 'Connect'];
 
