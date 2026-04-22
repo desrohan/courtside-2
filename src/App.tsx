@@ -12,6 +12,7 @@ import GroupsModule from './pages/GroupsModule';
 import UsersModule from './pages/UsersModule';
 import ChatModule from './pages/ChatModule';
 import TournamentModule from './pages/TournamentModule';
+import PlannerModule from './pages/PlannerModule';
 import SettingsModule from './pages/SettingsModule';
 import PlaceholderPage from './pages/PlaceholderPage';
 import AthleteSignup from './pages/AthleteSignup';
@@ -98,6 +99,7 @@ function AppRoutes() {
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="schedule/calendar" element={<Scheduler />} />
+          <Route path="planner" element={<PlannerModule />} />
           <Route path="user/*" element={<UsersModule />} />
           <Route path="invite" element={<PlaceholderPage title="Approve Requests" icon="user-check" />} />
           <Route path="team/*" element={<TeamsModule />} />
