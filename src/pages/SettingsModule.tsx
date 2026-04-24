@@ -30,7 +30,7 @@ import { settingsActivities as activities } from '@/data/settings';
 
 type SettingsSection = 'account' | 'resources' | 'governance';
 type AccountTab = 'organization' | 'roles' | 'designations';
-type ResourceTab = 'event-types' | 'facilities' | 'tags' | 'activity' | 'stats' | 'attendance' | 'report-types' | 'seasons';
+type ResourceTab = 'event-types' | 'facilities' | 'tags' | 'activity' | 'stats' | 'attendance' | 'report-types' | 'seasons' | 'compensation';
 
 export default function SettingsModule() {
   const location = useLocation();
@@ -311,7 +311,10 @@ function DesignationsSettings() {
         </table>
       </div>
       <AnimatePresence>{showModal && <CrudModal title={editItem ? 'Edit Designation' : 'Create Designation'} onClose={() => { setShowModal(false); setEditItem(null); }}
-        fields={[{ label: 'Name', value: editItem?.name || '', type: 'text' }, { label: 'Role', value: editItem?.roleName || '', type: 'select', options: roles.map(r => r.name) }]} />}</AnimatePresence>
+        fields={[
+          { label: 'Name', value: editItem?.name || '', type: 'text' },
+          { label: 'Role', value: editItem?.roleName || '', type: 'select', options: roles.map(r => r.name) },
+        ]} />}</AnimatePresence>
     </div>
   );
 }
@@ -332,6 +335,7 @@ function ResourceSection({ tab, setTab }: { tab: ResourceTab; setTab: (t: Resour
           { key: 'attendance' as ResourceTab, label: 'Attendance' },
           { key: 'report-types' as ResourceTab, label: 'Report Types' },
           { key: 'seasons' as ResourceTab, label: 'Seasons' },
+          { key: 'compensation' as ResourceTab, label: 'Compensation' },
         ]).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${tab === t.key ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500'}`}>{t.label}</button>
@@ -345,6 +349,78 @@ function ResourceSection({ tab, setTab }: { tab: ResourceTab; setTab: (t: Resour
       {tab === 'attendance' && <AttendanceSettings />}
       {tab === 'report-types' && <ReportTypesSettings />}
       {tab === 'seasons' && <SeasonsSettings />}
+      {tab === 'compensation' && <CompensationSettings />}
+    </div>
+  );
+}
+
+// ── Compensation ──────────────────────────────────────
+function CompensationSettings() {
+  const [showModal, setShowModal] = useState(false);
+  const [editItem, setEditItem] = useState<Designation | null>(null);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start gap-3 rounded-2xl border border-dark-100 bg-white px-4 py-4">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-court-50 text-court-700 shrink-0">
+          <DollarSign size={18} />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold text-dark-900">Compensation rules feed Workforce payroll</h3>
+          <p className="mt-1 text-xs leading-5 text-dark-500">
+            Define whether a designation is paid hourly or monthly, set rates and overtime multipliers. These rules flow into the Workforce payroll calculations automatically.
+          </p>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border border-dark-100 overflow-hidden">
+        <table className="w-full">
+          <thead><tr className="bg-dark-50/60">
+            <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400 w-12">#</th>
+            <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Designation</th>
+            <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Role</th>
+            <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Pay Type</th>
+            <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Rate</th>
+            <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Overtime</th>
+            <th className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-dark-400">Actions</th>
+          </tr></thead>
+          <tbody className="divide-y divide-dark-100">
+            {designations.map((d, i) => (
+              <tr key={d.id} className="hover:bg-dark-50/30">
+                <td className="px-4 py-3 text-xs text-dark-400">{i + 1}</td>
+                <td className="px-4 py-3 text-sm font-semibold text-dark-800">{d.name}</td>
+                <td className="px-4 py-3"><span className="px-2 py-0.5 bg-court-50 text-court-700 rounded text-[10px] font-semibold">{d.roleName}</span></td>
+                <td className="px-4 py-3">
+                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-semibold ${
+                    d.payType === 'hourly'
+                      ? 'bg-sky-50 text-sky-700'
+                      : d.payType === 'salaried'
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-dark-100 text-dark-500'
+                  }`}>
+                    {d.payType === 'hourly' ? 'Hourly' : d.payType === 'salaried' ? 'Monthly' : 'Excluded'}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-xs text-dark-600">
+                  {d.payType === 'none' ? 'Not tracked' : `${d.currency} ${d.rate.toLocaleString('en-IN')} / ${d.payType === 'hourly' ? 'hr' : 'month'}`}
+                </td>
+                <td className="px-4 py-3 text-xs text-dark-600">
+                  {d.payType === 'hourly' ? `${(d.overtimeMultiplier ?? 1).toFixed(2)}x rate` : d.payType === 'salaried' ? 'Included in monthly' : 'N/A'}
+                </td>
+                <td className="px-4 py-3"><div className="flex gap-1">
+                  <button onClick={() => { setEditItem(d); setShowModal(true); }} className="p-1.5 rounded-lg hover:bg-dark-50 text-dark-400 hover:text-dark-700"><Pencil size={14} /></button>
+                </div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <AnimatePresence>{showModal && <CrudModal title={editItem ? `Edit ${editItem.name} Compensation` : 'Set Compensation'} onClose={() => { setShowModal(false); setEditItem(null); }}
+        fields={[
+          { label: 'Designation', value: editItem?.name || '', type: 'text', disabled: true },
+          { label: 'Pay Type', value: editItem?.payType || 'salaried', type: 'select', options: ['hourly', 'salaried', 'none'] },
+          { label: 'Rate', value: editItem ? String(editItem.rate) : '', type: 'text' },
+          { label: 'Overtime Multiplier', value: editItem ? String(editItem.overtimeMultiplier ?? 1) : '1', type: 'text' },
+        ]} />}</AnimatePresence>
     </div>
   );
 }

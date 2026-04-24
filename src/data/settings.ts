@@ -87,18 +87,24 @@ export interface Designation {
   name: string;
   roleId: string;
   roleName: string;
+  payType: CompensationPayType;
+  rate: number;
+  currency: string;
+  overtimeMultiplier?: number;
 }
 
+export type CompensationPayType = 'hourly' | 'salaried' | 'none';
+
 export const designations: Designation[] = [
-  { id: 'des-01', name: 'Technical Director', roleId: 'role-01', roleName: 'Administrator' },
-  { id: 'des-02', name: 'Head Coach', roleId: 'role-02', roleName: 'Head Coach' },
-  { id: 'des-03', name: 'Assistant Coach', roleId: 'role-03', roleName: 'Assistant Coach' },
-  { id: 'des-04', name: 'Goalkeeping Coach', roleId: 'role-03', roleName: 'Assistant Coach' },
-  { id: 'des-05', name: 'Head Physiotherapist', roleId: 'role-04', roleName: 'Medical Staff' },
-  { id: 'des-06', name: 'Sports Scientist', roleId: 'role-04', roleName: 'Medical Staff' },
-  { id: 'des-07', name: 'Performance Analyst', roleId: 'role-06', roleName: 'Analyst' },
-  { id: 'des-08', name: 'Player', roleId: 'role-05', roleName: 'Player' },
-  { id: 'des-09', name: 'Kit Manager', roleId: 'role-06', roleName: 'Analyst' },
+  { id: 'des-01', name: 'Technical Director', roleId: 'role-01', roleName: 'Administrator', payType: 'salaried', rate: 180000, currency: 'INR', overtimeMultiplier: 1 },
+  { id: 'des-02', name: 'Head Coach', roleId: 'role-02', roleName: 'Head Coach', payType: 'salaried', rate: 150000, currency: 'INR', overtimeMultiplier: 1 },
+  { id: 'des-03', name: 'Assistant Coach', roleId: 'role-03', roleName: 'Assistant Coach', payType: 'salaried', rate: 95000, currency: 'INR', overtimeMultiplier: 1 },
+  { id: 'des-04', name: 'Goalkeeping Coach', roleId: 'role-03', roleName: 'Assistant Coach', payType: 'hourly', rate: 900, currency: 'INR', overtimeMultiplier: 1.5 },
+  { id: 'des-05', name: 'Head Physiotherapist', roleId: 'role-04', roleName: 'Medical Staff', payType: 'salaried', rate: 105000, currency: 'INR', overtimeMultiplier: 1 },
+  { id: 'des-06', name: 'Sports Scientist', roleId: 'role-04', roleName: 'Medical Staff', payType: 'hourly', rate: 850, currency: 'INR', overtimeMultiplier: 1.75 },
+  { id: 'des-07', name: 'Performance Analyst', roleId: 'role-06', roleName: 'Analyst', payType: 'hourly', rate: 700, currency: 'INR', overtimeMultiplier: 1.5 },
+  { id: 'des-08', name: 'Player', roleId: 'role-05', roleName: 'Player', payType: 'none', rate: 0, currency: 'INR', overtimeMultiplier: 1 },
+  { id: 'des-09', name: 'Kit Manager', roleId: 'role-06', roleName: 'Analyst', payType: 'hourly', rate: 500, currency: 'INR', overtimeMultiplier: 1.25 },
 ];
 
 // ── Event Types ───────────────────────────────────────

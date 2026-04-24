@@ -189,7 +189,7 @@ function NavItemRow({
 
       {/* Children */}
       <AnimatePresence>
-        {!collapsed && hasChildren && isExpanded && (
+        {!collapsed && hasChildren && (isExpanded || childActive) && (
           <motion.ul
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
