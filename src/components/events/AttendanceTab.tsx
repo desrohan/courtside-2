@@ -6,7 +6,7 @@ import {
   FileText, CheckCircle2, Settings2, ChevronDown, RotateCcw,
 } from 'lucide-react';
 import { AttendanceRecord, AttendanceStatus, AttendanceCheckInType, CalendarEvent, AttendanceGeofenceConfig, AttendanceQrConfig, AttendancePreference } from '@/data/events';
-import { attendanceGeofenceConfig, attendanceQrConfig, attendanceRules, attendancePreferenceLabels, attendanceUserTypes, AttendanceUserType, designations } from '@/data/settings';
+import { attendanceGeofenceConfig, attendanceQrConfig, attendanceRules, attendancePreferenceLabels, attendanceUserTypes, AttendanceUserType, designations, employeeTypeConfigs } from '@/data/settings';
 import { AssignUsersModal } from '@/components/ui/VisibilityPicker';
 import { users } from '@/data/users';
 import { roles as settingsRoles } from '@/data/settings';
@@ -674,6 +674,15 @@ export default function AttendanceTab({ records, event, initialFilter }: Props) 
                       </div>
                       <div>
                         <span className="text-sm font-medium text-dark-800">{record.name}</span>
+                        {(() => {
+                          const roleToType: Record<string, string> = { player: 'Athlete', coach: 'Coach', medical: 'Medical', staff: 'Operations', admin: 'General Admin' };
+                          const userType = roleToType[record.role] || '';
+                          const empCfg = employeeTypeConfigs.find(c => c.userType === userType);
+                          if (empCfg?.isEmployee && empCfg?.eventHoursCount) {
+                            return <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-50 text-amber-600">HRMS</span>;
+                          }
+                          return null;
+                        })()}
                         {filter === 'review' && (
                           <p className="text-[10px] text-dark-400 capitalize mt-0.5">{record.role}</p>
                         )}

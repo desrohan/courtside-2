@@ -59,6 +59,15 @@ export const getNavigation = (orgId: string): NavSection[] => [
       },
       { title: 'Sessions', path: `/o/${orgId}/session`, icon: 'target', permission: ['View Session'] },
       { title: 'Chat', path: `/o/${orgId}/chat`, icon: 'message-circle', permission: ['Chat'] },
+      {
+        title: 'Workforce',
+        path: `/o/${orgId}/hrms/attendance`,
+        icon: 'briefcase',
+        children: [
+          { title: 'Attendance', path: `/o/${orgId}/hrms/attendance` },
+          { title: 'Payroll', path: `/o/${orgId}/hrms/payroll` },
+        ],
+      },
       { title: 'Tournaments', path: `/o/${orgId}/tournament`, icon: 'trophy', permission: ['View Event'] },
       {
         title: 'Settings',

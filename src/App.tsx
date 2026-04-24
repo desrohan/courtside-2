@@ -14,6 +14,8 @@ import ChatModule from './pages/ChatModule';
 import TournamentModule from './pages/TournamentModule';
 import PlannerModule from './pages/PlannerModule';
 import SettingsModule from './pages/SettingsModule';
+import HRMSModule from './pages/HRMSModule';
+import PayrollModule from './pages/PayrollModule';
 import PlaceholderPage from './pages/PlaceholderPage';
 import AthleteSignup from './pages/AthleteSignup';
 import LoginPage from './pages/auth/LoginPage';
@@ -108,6 +110,11 @@ function AppRoutes() {
           <Route path="session" element={<PlaceholderPage title="Sessions" icon="target" />} />
           <Route path="chat/*" element={<ChatModule />} />
           <Route path="tournament/*" element={<TournamentModule />} />
+          <Route path="hrms">
+            <Route index element={<Navigate to="attendance" replace />} />
+            <Route path="attendance/*" element={<HRMSModule />} />
+            <Route path="payroll/*" element={<PayrollModule />} />
+          </Route>
           <Route path="settings/*" element={<SettingsModule />} />
           <Route path="helpguide/*" element={<PlaceholderPage title="Help Guide" icon="help-circle" />} />
         </Route>

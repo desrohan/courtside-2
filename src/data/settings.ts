@@ -297,7 +297,7 @@ export const eventResourcePreferences: EventResourcePreferences = {
 };
 
 // ── Attendance Settings ──────────────────────────────
-export type AttendancePreference = 'to_be_marked' | 'geolocation' | 'qr_code' | 'present_by_default' | 'absent_by_default';
+export type AttendancePreference = 'to_be_marked' | 'geolocation' | 'qr_code' | 'present_by_default' | 'absent_by_default' | 'hrms';
 
 export const attendancePreferenceLabels: Record<AttendancePreference, { label: string; short: string; color: string; bg: string }> = {
   to_be_marked:      { label: 'To Be Marked',       short: 'Marked',  color: 'text-dark-600',   bg: 'bg-dark-100' },
@@ -305,6 +305,7 @@ export const attendancePreferenceLabels: Record<AttendancePreference, { label: s
   qr_code:           { label: 'QR Code Check-in',   short: 'QR',      color: 'text-purple-600', bg: 'bg-purple-50' },
   present_by_default:{ label: 'Present by Default',  short: 'Present', color: 'text-green-600',  bg: 'bg-green-50' },
   absent_by_default: { label: 'Absent by Default',   short: 'Absent',  color: 'text-red-600',    bg: 'bg-red-50' },
+  hrms:              { label: 'HRMS Check-in',       short: 'HRMS',    color: 'text-amber-600',  bg: 'bg-amber-50' },
 };
 
 export const attendanceUserTypes = ['Athlete', 'Coach', 'Medical', 'Operations', 'Super Admin', 'Guest'] as const;
@@ -400,19 +401,21 @@ export const attendanceRules: AttendanceRule[] = [
 ];
 
 // ── NEW Attendance Config Model (event-type-first) ───────────
-export type CheckInMethod = 'manual' | 'geolocation' | 'qr_code' | 'none';
+export type AttendanceDefaultStatus = 'absent' | 'present' | 'none';
+
+export type CheckInMethod = 'manual' | 'geolocation' | 'qr_code' | 'hrms';
 
 export const checkInMethodLabels: Record<CheckInMethod, { label: string; short: string; color: string; bg: string; icon: string }> = {
   manual:       { label: 'Manual',             short: 'Manual',  color: 'text-dark-600',   bg: 'bg-dark-100',   icon: '✋' },
   geolocation:  { label: 'Geolocation',        short: 'Geo',     color: 'text-blue-600',   bg: 'bg-blue-50',    icon: '📍' },
   qr_code:      { label: 'QR Code',            short: 'QR',      color: 'text-purple-600', bg: 'bg-purple-50',  icon: '📱' },
-  none:         { label: 'No Check-in',        short: 'None',    color: 'text-dark-400',   bg: 'bg-dark-50',    icon: '—' },
+  hrms:         { label: 'HRMS',               short: 'HRMS',    color: 'text-amber-600',  bg: 'bg-amber-50',   icon: '🏢' },
 };
 
 export interface RoleAttendanceConfig {
   userType: AttendanceUserType;
-  defaultStatus: 'absent' | 'present';
-  checkInMethod: CheckInMethod;
+  defaultStatus: AttendanceDefaultStatus;
+  checkInMethod: CheckInMethod | null;
   requireCheckOut: boolean;
   qrRole?: 'scanner' | 'code';
   checkOutRequirements: string[];    // e.g. ['attendance', 'ratings']
@@ -441,13 +444,14 @@ export interface EventAttendanceConfig {
 }
 
 // Helper: convert old preference to new defaultStatus + checkInMethod
-function migratePreference(pref: AttendancePreference): { defaultStatus: 'absent' | 'present'; checkInMethod: CheckInMethod } {
+function migratePreference(pref: AttendancePreference): { defaultStatus: AttendanceDefaultStatus; checkInMethod: CheckInMethod | null } {
   switch (pref) {
-    case 'present_by_default': return { defaultStatus: 'present', checkInMethod: 'none' };
-    case 'absent_by_default':  return { defaultStatus: 'absent',  checkInMethod: 'none' };
-    case 'to_be_marked':       return { defaultStatus: 'absent',  checkInMethod: 'manual' };
-    case 'geolocation':        return { defaultStatus: 'absent',  checkInMethod: 'geolocation' };
-    case 'qr_code':            return { defaultStatus: 'absent',  checkInMethod: 'qr_code' };
+    case 'present_by_default': return { defaultStatus: 'present', checkInMethod: null };
+    case 'absent_by_default':  return { defaultStatus: 'absent',  checkInMethod: null };
+    case 'to_be_marked':       return { defaultStatus: 'none',    checkInMethod: 'manual' };
+    case 'geolocation':        return { defaultStatus: 'none',    checkInMethod: 'geolocation' };
+    case 'qr_code':            return { defaultStatus: 'none',    checkInMethod: 'qr_code' };
+    case 'hrms':               return { defaultStatus: 'none',    checkInMethod: 'hrms' };
   }
 }
 
@@ -489,3 +493,217 @@ export const eventAttendanceConfigs: EventAttendanceConfig[] = settingsEventType
     checkoutRequired: etRules.some(r => r.requireCheckOut),
   };
 });
+
+// ── HRMS Configuration ──────────────────────────────────
+export type CompensationType = 'hourly' | 'salaried';
+
+export interface EmployeeTypeConfig {
+  userType: string;
+  isEmployee: boolean;
+  compensationType: CompensationType;
+  eventHoursCount: boolean; // event attendance hours feed into HRMS
+}
+
+export interface WorkDay {
+  day: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+  isWorkDay: boolean;
+  startTime: string;       // e.g. "09:00"
+  endTime: string;         // e.g. "17:00"
+  requiredHours: number;
+  graceMinutes: number;    // late threshold
+  halfDayHours: number;
+}
+
+export interface WorkSchedule {
+  id: string;
+  name: string;
+  userTypes: string[];
+  days: WorkDay[];
+}
+
+export type LeaveType = 'sick' | 'casual' | 'annual';
+
+export interface LeavePolicy {
+  id: string;
+  leaveType: LeaveType;
+  name: string;
+  annualQuota: number;
+  carryForward: boolean;
+  maxCarryForward: number;
+  requiresApproval: boolean;
+  applicableUserTypes: string[];
+}
+
+export type PayPeriod = 'monthly' | 'biweekly' | 'weekly';
+export type AbsenceDeductionType = 'proportional' | 'fixed';
+export type ReimbursementCategory = 'travel' | 'equipment' | 'medical' | 'food' | 'other';
+
+export interface AllowanceTemplate {
+  name: string;
+  amount: number;
+  taxable: boolean;
+}
+
+export interface DeductionTemplate {
+  name: string;
+  type: 'fixed' | 'percentage';
+  value: number;
+  preTax: boolean;
+}
+
+export interface SalaryTemplate {
+  employeeType: string;
+  baseSalary: number;
+  hourlyRate: number;
+  allowances: AllowanceTemplate[];
+  deductions: DeductionTemplate[];
+}
+
+export interface ReimbursementCategoryConfig {
+  category: ReimbursementCategory;
+  label: string;
+  monthlyLimit: number;
+  requiresReceipt: boolean;
+}
+
+export interface PayrollConfig {
+  payPeriod: PayPeriod;
+  payDay: number;
+  currency: string;
+  overtimeMultiplier: number;
+  halfDayDeductionPercent: number;
+  absenceDeductionType: AbsenceDeductionType;
+  fixedAbsentDeduction: number;
+  reimbursementCarryForward: boolean;
+  payoutProvider: 'razorpay' | 'manual';
+}
+
+// Default employee type configuration
+export const employeeTypeConfigs: EmployeeTypeConfig[] = [
+  { userType: 'General Admin', isEmployee: true,  compensationType: 'salaried', eventHoursCount: false },
+  { userType: 'Coach',         isEmployee: true,  compensationType: 'hourly',   eventHoursCount: true },
+  { userType: 'Medical',       isEmployee: true,  compensationType: 'salaried', eventHoursCount: false },
+  { userType: 'Athlete',       isEmployee: false, compensationType: 'salaried', eventHoursCount: false },
+  { userType: 'Operations',    isEmployee: true,  compensationType: 'salaried', eventHoursCount: false },
+  { userType: 'Connect',       isEmployee: false, compensationType: 'salaried', eventHoursCount: false },
+];
+
+const defaultWorkDay = (day: WorkDay['day'], isWorkDay: boolean): WorkDay => ({
+  day,
+  isWorkDay,
+  startTime: '09:00',
+  endTime: '17:00',
+  requiredHours: 8,
+  graceMinutes: 15,
+  halfDayHours: 4,
+});
+
+export const workSchedules: WorkSchedule[] = [
+  {
+    id: 'ws-01',
+    name: 'Office Full-Time',
+    userTypes: ['General Admin', 'Operations', 'Medical'],
+    days: [
+      defaultWorkDay('monday', true),
+      defaultWorkDay('tuesday', true),
+      defaultWorkDay('wednesday', true),
+      defaultWorkDay('thursday', true),
+      defaultWorkDay('friday', true),
+      defaultWorkDay('saturday', false),
+      defaultWorkDay('sunday', false),
+    ],
+  },
+  {
+    id: 'ws-02',
+    name: 'Coaching Schedule',
+    userTypes: ['Coach'],
+    days: [
+      { day: 'monday',    isWorkDay: true,  startTime: '08:00', endTime: '18:00', requiredHours: 0, graceMinutes: 30, halfDayHours: 4 },
+      { day: 'tuesday',   isWorkDay: true,  startTime: '08:00', endTime: '18:00', requiredHours: 0, graceMinutes: 30, halfDayHours: 4 },
+      { day: 'wednesday', isWorkDay: true,  startTime: '08:00', endTime: '18:00', requiredHours: 0, graceMinutes: 30, halfDayHours: 4 },
+      { day: 'thursday',  isWorkDay: true,  startTime: '08:00', endTime: '18:00', requiredHours: 0, graceMinutes: 30, halfDayHours: 4 },
+      { day: 'friday',    isWorkDay: true,  startTime: '08:00', endTime: '18:00', requiredHours: 0, graceMinutes: 30, halfDayHours: 4 },
+      { day: 'saturday',  isWorkDay: true,  startTime: '08:00', endTime: '14:00', requiredHours: 0, graceMinutes: 30, halfDayHours: 3 },
+      { day: 'sunday',    isWorkDay: false, startTime: '09:00', endTime: '17:00', requiredHours: 0, graceMinutes: 30, halfDayHours: 4 },
+    ],
+  },
+];
+
+export const leavePolicies: LeavePolicy[] = [
+  { id: 'lp-01', leaveType: 'sick',   name: 'Sick Leave',   annualQuota: 12, carryForward: false, maxCarryForward: 0, requiresApproval: false, applicableUserTypes: ['General Admin', 'Coach', 'Medical', 'Operations'] },
+  { id: 'lp-02', leaveType: 'casual', name: 'Casual Leave', annualQuota: 10, carryForward: false, maxCarryForward: 0, requiresApproval: true,  applicableUserTypes: ['General Admin', 'Coach', 'Medical', 'Operations'] },
+  { id: 'lp-03', leaveType: 'annual', name: 'Annual Leave', annualQuota: 15, carryForward: true,  maxCarryForward: 5, requiresApproval: true,  applicableUserTypes: ['General Admin', 'Coach', 'Medical', 'Operations'] },
+];
+
+export const payrollConfig: PayrollConfig = {
+  payPeriod: 'monthly',
+  payDay: 30,
+  currency: 'INR',
+  overtimeMultiplier: 1.5,
+  halfDayDeductionPercent: 0.5,
+  absenceDeductionType: 'proportional',
+  fixedAbsentDeduction: 2500,
+  reimbursementCarryForward: true,
+  payoutProvider: 'razorpay',
+};
+
+export const salaryTemplates: SalaryTemplate[] = [
+  {
+    employeeType: 'General Admin',
+    baseSalary: 185000,
+    hourlyRate: 0,
+    allowances: [
+      { name: 'House Rent Allowance', amount: 32000, taxable: true },
+      { name: 'Transport Allowance', amount: 6000, taxable: false },
+    ],
+    deductions: [
+      { name: 'Provident Fund', type: 'percentage', value: 12, preTax: true },
+      { name: 'Professional Tax', type: 'fixed', value: 200, preTax: false },
+    ],
+  },
+  {
+    employeeType: 'Coach',
+    baseSalary: 0,
+    hourlyRate: 1800,
+    allowances: [
+      { name: 'Session Preparation', amount: 4000, taxable: true },
+    ],
+    deductions: [
+      { name: 'TDS Reserve', type: 'percentage', value: 5, preTax: false },
+    ],
+  },
+  {
+    employeeType: 'Medical',
+    baseSalary: 145000,
+    hourlyRate: 0,
+    allowances: [
+      { name: 'Clinical Allowance', amount: 18000, taxable: true },
+      { name: 'Meal Allowance', amount: 3500, taxable: false },
+    ],
+    deductions: [
+      { name: 'Provident Fund', type: 'percentage', value: 12, preTax: true },
+      { name: 'Professional Tax', type: 'fixed', value: 200, preTax: false },
+    ],
+  },
+  {
+    employeeType: 'Operations',
+    baseSalary: 98000,
+    hourlyRate: 0,
+    allowances: [
+      { name: 'Communication Allowance', amount: 2500, taxable: false },
+      { name: 'Transport Allowance', amount: 4500, taxable: false },
+    ],
+    deductions: [
+      { name: 'Provident Fund', type: 'percentage', value: 12, preTax: true },
+      { name: 'Professional Tax', type: 'fixed', value: 200, preTax: false },
+    ],
+  },
+];
+
+export const reimbursementCategoryConfigs: ReimbursementCategoryConfig[] = [
+  { category: 'travel', label: 'Travel', monthlyLimit: 15000, requiresReceipt: true },
+  { category: 'equipment', label: 'Equipment', monthlyLimit: 25000, requiresReceipt: true },
+  { category: 'medical', label: 'Medical', monthlyLimit: 12000, requiresReceipt: true },
+  { category: 'food', label: 'Food', monthlyLimit: 5000, requiresReceipt: true },
+  { category: 'other', label: 'Other', monthlyLimit: 8000, requiresReceipt: false },
+];

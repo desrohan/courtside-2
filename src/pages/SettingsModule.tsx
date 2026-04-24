@@ -16,8 +16,12 @@ import {
   attendanceRules, attendanceUserTypes, attendancePreferenceLabels, attendanceGeofenceConfig,
   AttendancePreference, AttendanceRule,
   eventAttendanceConfigs, EventAttendanceConfig, RoleAttendanceConfig,
-  checkInMethodLabels, CheckInMethod,
+  checkInMethodLabels, CheckInMethod, AttendanceDefaultStatus,
   reportTypes, ReportTypeConfig, ReportFieldDef, ReportFieldType,
+  employeeTypeConfigs, EmployeeTypeConfig, workSchedules, WorkSchedule, WorkDay,
+  leavePolicies, LeavePolicy, CompensationType, LeaveType,
+  payrollConfig, PayrollConfig, salaryTemplates, SalaryTemplate,
+  reimbursementCategoryConfigs, ReimbursementCategoryConfig,
 } from '@/data/settings';
 import { organizations } from '@/data/organizations';
 import {
@@ -1600,7 +1604,7 @@ function AttendanceSettings() {
   const options: { key: AttendanceOptionTab; label: string }[] = [
     { key: 'option-1', label: 'Option 1' },
     { key: 'option-2', label: 'Option 2' },
-    { key: 'option-3', label: 'Option 3' },
+    { key: 'option-3', label: 'HRMS' },
     { key: 'option-4', label: 'Option 4' },
     { key: 'option-5', label: 'Option 5' },
   ];
@@ -1616,9 +1620,346 @@ function AttendanceSettings() {
       </div>
       {activeOption === 'option-1' && <AttendanceOption1 />}
       {activeOption === 'option-2' && <AttendanceOption2 />}
-      {activeOption === 'option-3' && <AttendanceOptionPlaceholder n={3} />}
+      {activeOption === 'option-3' && <AttendanceHRMSConfig />}
       {activeOption === 'option-4' && <AttendanceOptionPlaceholder n={4} />}
       {activeOption === 'option-5' && <AttendanceOptionPlaceholder n={5} />}
+    </div>
+  );
+}
+
+// ── Option 3: HRMS Configuration ─────────────────────────
+function AttendanceHRMSConfig() {
+  const [empConfigs, setEmpConfigs] = useState(employeeTypeConfigs);
+  const [schedules, setSchedules] = useState(workSchedules);
+  const [policies, setPolicies] = useState(leavePolicies);
+  const [payrollSettings] = useState(payrollConfig);
+  const [salaryConfig] = useState(salaryTemplates);
+  const [reimbursementConfig] = useState(reimbursementCategoryConfigs);
+  const [activeSection, setActiveSection] = useState<'employees' | 'schedules' | 'leave' | 'integration' | 'payroll'>('employees');
+
+  const toggleEmployee = (userType: string) => {
+    setEmpConfigs(prev => prev.map(c => c.userType === userType ? { ...c, isEmployee: !c.isEmployee } : c));
+  };
+
+  const toggleCompensation = (userType: string) => {
+    setEmpConfigs(prev => prev.map(c => c.userType === userType ? { ...c, compensationType: c.compensationType === 'hourly' ? 'salaried' : 'hourly' } : c));
+  };
+
+  const toggleEventHours = (userType: string) => {
+    setEmpConfigs(prev => prev.map(c => c.userType === userType ? { ...c, eventHoursCount: !c.eventHoursCount } : c));
+  };
+
+  const sections = [
+    { key: 'employees' as const, label: 'Employee Types', icon: Users },
+    { key: 'schedules' as const, label: 'Work Schedules', icon: Clock },
+    { key: 'leave' as const, label: 'Leave Policies', icon: Calendar },
+    { key: 'integration' as const, label: 'Event Integration', icon: Activity },
+    { key: 'payroll' as const, label: 'Payroll', icon: DollarSign },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* Section tabs */}
+      <div className="flex gap-1 bg-dark-50 rounded-lg p-0.5 w-fit">
+        {sections.map(s => (
+          <button key={s.key} onClick={() => setActiveSection(s.key)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${activeSection === s.key ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500 hover:text-dark-700'}`}>
+            <s.icon size={12} />
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Employee Types */}
+      {activeSection === 'employees' && (
+        <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+          <div className="p-4 border-b border-dark-100">
+            <h3 className="text-sm font-bold text-dark-900">Employee Type Configuration</h3>
+            <p className="text-xs text-dark-400 mt-0.5">Configure which user types are considered employees and their compensation type</p>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-dark-50 text-dark-500 font-semibold text-left">
+                <th className="px-4 py-2.5">User Type</th>
+                <th className="px-4 py-2.5 text-center">Is Employee</th>
+                <th className="px-4 py-2.5 text-center">Compensation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {empConfigs.map(c => (
+                <tr key={c.userType} className="border-t border-dark-50 hover:bg-dark-25">
+                  <td className="px-4 py-2.5 font-medium text-dark-700">{c.userType}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <button onClick={() => toggleEmployee(c.userType)} className="inline-flex">
+                      {c.isEmployee
+                        ? <ToggleRight size={20} className="text-green-500" />
+                        : <ToggleLeft size={20} className="text-dark-300" />}
+                    </button>
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    {c.isEmployee && (
+                      <button onClick={() => toggleCompensation(c.userType)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${c.compensationType === 'hourly' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>
+                        {c.compensationType === 'hourly' ? <Clock size={10} /> : <DollarSign size={10} />}
+                        {c.compensationType === 'hourly' ? 'Hourly' : 'Salaried'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Work Schedules */}
+      {activeSection === 'schedules' && (
+        <div className="space-y-3">
+          {schedules.map(schedule => (
+            <div key={schedule.id} className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+              <div className="p-4 border-b border-dark-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-dark-900">{schedule.name}</h3>
+                  <p className="text-xs text-dark-400 mt-0.5">Applies to: {schedule.userTypes.join(', ')}</p>
+                </div>
+                <button className="p-1.5 rounded-lg hover:bg-dark-50 text-dark-400"><Pencil size={14} /></button>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-dark-50 text-dark-500 font-semibold text-left">
+                    <th className="px-4 py-2">Day</th>
+                    <th className="px-4 py-2 text-center">Work Day</th>
+                    <th className="px-4 py-2 text-center">Start</th>
+                    <th className="px-4 py-2 text-center">End</th>
+                    <th className="px-4 py-2 text-center">Required Hours</th>
+                    <th className="px-4 py-2 text-center">Grace (min)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {schedule.days.map(d => (
+                    <tr key={d.day} className={`border-t border-dark-50 ${!d.isWorkDay ? 'bg-dark-25 text-dark-300' : ''}`}>
+                      <td className="px-4 py-2 font-medium capitalize">{d.day}</td>
+                      <td className="px-4 py-2 text-center">
+                        {d.isWorkDay
+                          ? <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                          : <span className="inline-block w-2 h-2 rounded-full bg-dark-200" />}
+                      </td>
+                      <td className="px-4 py-2 text-center">{d.isWorkDay ? d.startTime : '—'}</td>
+                      <td className="px-4 py-2 text-center">{d.isWorkDay ? d.endTime : '—'}</td>
+                      <td className="px-4 py-2 text-center">{d.isWorkDay ? (d.requiredHours > 0 ? `${d.requiredHours}h` : 'Flexible') : '—'}</td>
+                      <td className="px-4 py-2 text-center">{d.isWorkDay ? `${d.graceMinutes}m` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+          <button className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-dark-200 text-xs font-semibold text-dark-400 hover:text-dark-600 hover:border-dark-300 w-full justify-center">
+            <Plus size={14} /> Add Work Schedule
+          </button>
+        </div>
+      )}
+
+      {/* Leave Policies */}
+      {activeSection === 'leave' && (
+        <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+          <div className="p-4 border-b border-dark-100">
+            <h3 className="text-sm font-bold text-dark-900">Leave Policies</h3>
+            <p className="text-xs text-dark-400 mt-0.5">Configure annual quotas and approval requirements for each leave type</p>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-dark-50 text-dark-500 font-semibold text-left">
+                <th className="px-4 py-2.5">Leave Type</th>
+                <th className="px-4 py-2.5 text-center">Annual Quota</th>
+                <th className="px-4 py-2.5 text-center">Carry Forward</th>
+                <th className="px-4 py-2.5 text-center">Max Carry</th>
+                <th className="px-4 py-2.5 text-center">Requires Approval</th>
+                <th className="px-4 py-2.5">Applicable To</th>
+              </tr>
+            </thead>
+            <tbody>
+              {policies.map(p => (
+                <tr key={p.id} className="border-t border-dark-50 hover:bg-dark-25">
+                  <td className="px-4 py-2.5">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      p.leaveType === 'sick' ? 'bg-red-50 text-red-600' :
+                      p.leaveType === 'casual' ? 'bg-amber-50 text-amber-600' :
+                      'bg-blue-50 text-blue-600'
+                    }`}>
+                      {p.name}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-bold text-dark-700">{p.annualQuota} days</td>
+                  <td className="px-4 py-2.5 text-center">
+                    {p.carryForward
+                      ? <Check size={14} className="text-green-500 mx-auto" />
+                      : <X size={14} className="text-dark-300 mx-auto" />}
+                  </td>
+                  <td className="px-4 py-2.5 text-center text-dark-500">{p.carryForward ? `${p.maxCarryForward} days` : '—'}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    {p.requiresApproval
+                      ? <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Required</span>
+                      : <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">Auto-approve</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-dark-500 text-[10px]">{p.applicableUserTypes.join(', ')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Event Integration */}
+      {activeSection === 'integration' && (
+        <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+          <div className="p-4 border-b border-dark-100">
+            <h3 className="text-sm font-bold text-dark-900">Event Attendance Integration</h3>
+            <p className="text-xs text-dark-400 mt-0.5">Configure which employee types have their event attendance hours counted toward HRMS work hours</p>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-dark-50 text-dark-500 font-semibold text-left">
+                <th className="px-4 py-2.5">User Type</th>
+                <th className="px-4 py-2.5 text-center">Count Event Hours</th>
+                <th className="px-4 py-2.5">Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              {empConfigs.filter(c => c.isEmployee).map(c => (
+                <tr key={c.userType} className="border-t border-dark-50 hover:bg-dark-25">
+                  <td className="px-4 py-2.5 font-medium text-dark-700">{c.userType}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <button onClick={() => toggleEventHours(c.userType)} className="inline-flex">
+                      {c.eventHoursCount
+                        ? <ToggleRight size={20} className="text-green-500" />
+                        : <ToggleLeft size={20} className="text-dark-300" />}
+                    </button>
+                  </td>
+                  <td className="px-4 py-2.5 text-dark-400">
+                    {c.eventHoursCount
+                      ? 'Event attendance hours will be added to daily HRMS work hours'
+                      : 'Only direct HRMS check-in/out hours will be tracked'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeSection === 'payroll' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { label: 'Pay Period', value: payrollSettings.payPeriod.replace('_', ' '), sub: 'Cycle', tone: 'text-dark-900' },
+              { label: 'Pay Day', value: `${payrollSettings.payDay}`, sub: 'Of every month', tone: 'text-dark-900' },
+              { label: 'Overtime Multiplier', value: `${payrollSettings.overtimeMultiplier}x`, sub: 'Applied to extra hours', tone: 'text-blue-600' },
+              { label: 'Default Currency', value: payrollSettings.currency, sub: 'Razorpay ready', tone: 'text-green-600' },
+            ].map(card => (
+              <div key={card.label} className="bg-white border border-dark-100 rounded-xl p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-dark-400">{card.label}</p>
+                <p className={`text-lg font-extrabold mt-1 capitalize ${card.tone}`}>{card.value}</p>
+                <p className="text-[10px] text-dark-300 mt-1">{card.sub}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+            <div className="p-4 border-b border-dark-100">
+              <h3 className="text-sm font-bold text-dark-900">Salary Templates</h3>
+              <p className="text-xs text-dark-400 mt-0.5">Base or hourly pay setup used by the Payroll module for monthly calculations and payslips</p>
+            </div>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-dark-50 text-dark-500 font-semibold text-left">
+                  <th className="px-4 py-2.5">Employee Type</th>
+                  <th className="px-4 py-2.5">Pay Model</th>
+                  <th className="px-4 py-2.5">Base / Rate</th>
+                  <th className="px-4 py-2.5">Allowances</th>
+                  <th className="px-4 py-2.5">Deductions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {salaryConfig.map(template => {
+                  const employeeConfig = empConfigs.find(config => config.userType === template.employeeType);
+                  const allowanceTotal = template.allowances.reduce((sum, allowance) => sum + allowance.amount, 0);
+                  return (
+                    <tr key={template.employeeType} className="border-t border-dark-50 hover:bg-dark-25">
+                      <td className="px-4 py-2.5 font-semibold text-dark-800">{template.employeeType}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${employeeConfig?.compensationType === 'hourly' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>
+                          {employeeConfig?.compensationType === 'hourly' ? 'Hourly' : 'Salaried'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-dark-600 font-bold">
+                        {employeeConfig?.compensationType === 'hourly' ? `INR ${template.hourlyRate}/hr` : `INR ${template.baseSalary.toLocaleString('en-IN')}`}
+                      </td>
+                      <td className="px-4 py-2.5 text-dark-500">{template.allowances.length} items · INR {allowanceTotal.toLocaleString('en-IN')}</td>
+                      <td className="px-4 py-2.5 text-dark-500">{template.deductions.map(deduction => `${deduction.name} (${deduction.type === 'percentage' ? `${deduction.value}%` : `INR ${deduction.value}`})`).join(', ')}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-4">
+            <div className="bg-white border border-dark-100 rounded-xl overflow-hidden">
+              <div className="p-4 border-b border-dark-100">
+                <h3 className="text-sm font-bold text-dark-900">Reimbursement Categories</h3>
+                <p className="text-xs text-dark-400 mt-0.5">Approved claims flow into the payroll run and appear on the employee payslip</p>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-dark-50 text-dark-500 font-semibold text-left">
+                    <th className="px-4 py-2.5">Category</th>
+                    <th className="px-4 py-2.5">Monthly Limit</th>
+                    <th className="px-4 py-2.5">Receipt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reimbursementConfig.map(category => (
+                    <tr key={category.category} className="border-t border-dark-50 hover:bg-dark-25">
+                      <td className="px-4 py-2.5 font-semibold text-dark-800">{category.label}</td>
+                      <td className="px-4 py-2.5 text-dark-600">INR {category.monthlyLimit.toLocaleString('en-IN')}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${category.requiresReceipt ? 'bg-blue-50 text-blue-600' : 'bg-dark-50 text-dark-500'}`}>
+                          {category.requiresReceipt ? 'Required' : 'Optional'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-white border border-dark-100 rounded-xl p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-dark-900">Disbursement & Compliance</h3>
+                <p className="text-xs text-dark-400 mt-0.5">Frontend mock configuration for payout processing and payroll controls</p>
+              </div>
+              <div className="space-y-3">
+                <div className="rounded-xl bg-dark-25 border border-dark-100 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-dark-400">Payout Provider</p>
+                  <p className="text-sm font-bold text-dark-800 mt-1 capitalize">{payrollSettings.payoutProvider}</p>
+                  <p className="text-[11px] text-dark-400 mt-1">Payroll disbursement buttons in the module are wired for Razorpay batch payouts.</p>
+                </div>
+                <div className="rounded-xl bg-dark-25 border border-dark-100 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-dark-400">Absence Handling</p>
+                  <p className="text-sm font-bold text-dark-800 mt-1 capitalize">{payrollSettings.absenceDeductionType}</p>
+                  <p className="text-[11px] text-dark-400 mt-1">Half day deduction: {(payrollSettings.halfDayDeductionPercent * 100).toFixed(0)}% of daily pay.</p>
+                </div>
+                <div className="rounded-xl bg-green-50 border border-green-100 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-green-600">Connected Outputs</p>
+                  <p className="text-sm font-bold text-green-700 mt-1">Payroll, Payslips, Reimbursements</p>
+                  <p className="text-[11px] text-green-600 mt-1">These settings feed the new Workforce → Payroll child module.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1983,7 +2324,7 @@ function AttendanceOption2() {
     }));
   };
 
-  const methods: CheckInMethod[] = ['manual', 'geolocation', 'qr_code', 'none'];
+  const methods: CheckInMethod[] = ['manual', 'geolocation', 'qr_code', 'hrms'];
   const checkoutReqOptions = ['Attendance', 'Ratings', 'Session RPE', 'Hydration'];
 
   return (
@@ -2025,7 +2366,7 @@ function AttendanceOption2() {
             {configs.map(cfg => {
               const et = getEventType(cfg.eventTypeId);
               const isExpanded = expandedId === cfg.eventTypeId;
-              const uniqueMethods = [...new Set(cfg.roles.map(r => r.checkInMethod).filter(m => m !== 'none'))];
+              const uniqueMethods = [...new Set(cfg.roles.map(r => r.checkInMethod).filter((m): m is CheckInMethod => m !== null))];
               const checkoutCount = cfg.roles.filter(r => r.requireCheckOut).length;
 
               return (
@@ -2100,8 +2441,8 @@ function AttendanceOption2() {
                                   </thead>
                                   <tbody className="divide-y divide-dark-50">
                                     {cfg.roles.map(role => {
-                                      const isGeoOrQr = role.checkInMethod === 'geolocation' || role.checkInMethod === 'qr_code';
-                                      const isQr = role.checkInMethod === 'qr_code';
+                                      const isGeoOrQr = role.defaultStatus === 'none' && (role.checkInMethod === 'geolocation' || role.checkInMethod === 'qr_code');
+                                      const isQr = role.defaultStatus === 'none' && role.checkInMethod === 'qr_code';
                                       return (
                                         <tr key={role.userType} className="hover:bg-dark-50/20">
                                           <td className="px-4 py-2.5">
@@ -2111,11 +2452,28 @@ function AttendanceOption2() {
                                           <td className="px-3 py-2.5">
                                             <select
                                               value={role.defaultStatus}
-                                              onChange={e => updateRole(cfg.eventTypeId, role.userType, { defaultStatus: e.target.value as 'absent' | 'present' })}
+                                              onChange={e => {
+                                                const nextStatus = e.target.value as AttendanceDefaultStatus;
+                                                const patch: Partial<RoleAttendanceConfig> = { defaultStatus: nextStatus };
+                                                if (nextStatus === 'none') {
+                                                  patch.checkInMethod = role.checkInMethod ?? 'manual';
+                                                } else {
+                                                  patch.checkInMethod = null;
+                                                  patch.qrRole = undefined;
+                                                  patch.requireCheckOut = false;
+                                                  patch.checkOutRequirements = [];
+                                                }
+                                                updateRole(cfg.eventTypeId, role.userType, patch);
+                                              }}
                                               className={`h-7 px-2 rounded-lg border text-[10px] font-bold focus:outline-none focus:ring-2 focus:ring-court-500/20 ${
-                                                role.defaultStatus === 'present' ? 'border-green-200 bg-green-50 text-green-600' : 'border-red-200 bg-red-50 text-red-600'
+                                                role.defaultStatus === 'present'
+                                                  ? 'border-green-200 bg-green-50 text-green-600'
+                                                  : role.defaultStatus === 'absent'
+                                                    ? 'border-red-200 bg-red-50 text-red-600'
+                                                    : 'border-dark-200 bg-dark-50 text-dark-500'
                                               }`}
                                             >
+                                              <option value="none">None</option>
                                               <option value="absent">Absent</option>
                                               <option value="present">Present</option>
                                             </select>
@@ -2123,7 +2481,8 @@ function AttendanceOption2() {
                                           {/* Check-in Method */}
                                           <td className="px-3 py-2.5">
                                             <select
-                                              value={role.checkInMethod}
+                                              value={role.checkInMethod ?? ''}
+                                              disabled={role.defaultStatus !== 'none'}
                                               onChange={e => {
                                                 const newMethod = e.target.value as CheckInMethod;
                                                 const patch: Partial<RoleAttendanceConfig> = { checkInMethod: newMethod };
@@ -2136,9 +2495,12 @@ function AttendanceOption2() {
                                                 updateRole(cfg.eventTypeId, role.userType, patch);
                                               }}
                                               className={`h-7 px-2 rounded-lg border text-[10px] font-bold focus:outline-none focus:ring-2 focus:ring-court-500/20 ${
-                                                checkInMethodLabels[role.checkInMethod].bg
-                                              } ${checkInMethodLabels[role.checkInMethod].color} border-dark-200`}
+                                                role.defaultStatus !== 'none'
+                                                  ? 'bg-dark-50 text-dark-300 border-dark-200 cursor-not-allowed'
+                                                  : `${checkInMethodLabels[role.checkInMethod ?? 'manual'].bg} ${checkInMethodLabels[role.checkInMethod ?? 'manual'].color} border-dark-200`
+                                              }`}
                                             >
+                                              <option value="" disabled>Choose method</option>
                                               {methods.map(m => (
                                                 <option key={m} value={m}>{checkInMethodLabels[m].label}</option>
                                               ))}
