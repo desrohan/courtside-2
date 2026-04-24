@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus, Search, Pencil, Trash2, Eye, User, Users, ArrowLeft,
   Mail, Phone, Shield, Calendar, Heart, FileText, AlertCircle,
   MapPin, Tag, ToggleLeft, ToggleRight, ChevronDown, Activity,
+  Briefcase,
 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { getUserMonthlyAttendance, workforceReferenceMonth, type AttendanceStatus } from '@/data/workforce';
 import { users, User as UserType, currentUser } from '@/data/users';
 import { teams } from '@/data/teams';
 import { getAthleteRegistration } from '@/data/athleteRegistration';
@@ -12,18 +15,35 @@ import RegistrationStatusCard from '@/components/registration/RegistrationStatus
 import RegistrationWizard from '@/components/registration/RegistrationWizard';
 
 type ViewMode = 'list' | 'profile';
-type ProfileTab = 'profile' | 'health' | 'events' | 'other' | 'registration';
+type ProfileTab = 'profile' | 'health' | 'events' | 'other' | 'registration' | 'attendance';
 
 const userTypeColors: Record<string, string> = {
   admin: '#8E33FF', coach: '#00A76F', player: '#00B8D9', medical: '#FF6C40', staff: '#637381',
 };
 
 export default function UsersModule() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
   const [profileTab, setProfileTab] = useState<ProfileTab>('profile');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+
+  // Deep-link: open profile from URL params (?id=xxx&tab=attendance)
+  useEffect(() => {
+    const uid = searchParams.get('id');
+    const tab = searchParams.get('tab') as ProfileTab | null;
+    if (uid) {
+      const found = users.find(u => u.id === uid);
+      if (found) {
+        setSelectedUser(found);
+        setViewMode('profile');
+        setProfileTab(tab ?? 'profile');
+      }
+      // Clear params so back-nav works cleanly
+      setSearchParams({}, { replace: true });
+    }
+  }, []);
 
   const filtered = users
     .filter(u => roleFilter === 'all' || u.role === roleFilter)
@@ -171,6 +191,7 @@ export default function UsersModule() {
               {([
                 { key: 'profile' as ProfileTab, label: 'Profile', icon: <User size={14} /> },
                 ...(selectedUser.role === 'player' ? [{ key: 'registration' as ProfileTab, label: 'Registration', icon: <Shield size={14} /> }] : []),
+                ...(selectedUser.role !== 'player' ? [{ key: 'attendance' as ProfileTab, label: 'Attendance', icon: <Briefcase size={14} /> }] : []),
                 { key: 'health' as ProfileTab, label: 'Health', icon: <Heart size={14} /> },
                 { key: 'events' as ProfileTab, label: 'Events', icon: <Calendar size={14} /> },
                 { key: 'other' as ProfileTab, label: 'Other Details', icon: <FileText size={14} /> },
@@ -271,6 +292,9 @@ export default function UsersModule() {
               {profileTab === 'registration' && selectedUser.role === 'player' && (
                 <RegistrationTab user={selectedUser} />
               )}
+              {profileTab === 'attendance' && selectedUser.role !== 'player' && (
+                <UserAttendanceTab user={selectedUser} />
+              )}
             </div>
           </div>
         </>
@@ -317,6 +341,104 @@ function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string;
       <div>
         <p className="text-[11px] text-dark-400 uppercase tracking-wider">{label}</p>
         <p className="text-sm font-medium text-dark-800 capitalize">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   User Attendance Tab (staff only)
+   ═══════════════════════════════════════════════════════ */
+const statusMeta: Record<AttendanceStatus, { label: string; short: string; pillClass: string; cellClass: string; dotClass: string }> = {
+  present: { label: 'Present', short: 'P', pillClass: 'bg-emerald-50 text-emerald-700', cellClass: 'bg-emerald-400 text-white', dotClass: 'bg-emerald-500' },
+  absent: { label: 'Absent', short: 'A', pillClass: 'bg-indigo-50 text-indigo-700', cellClass: 'bg-indigo-200 text-indigo-800', dotClass: 'bg-indigo-400' },
+  leave: { label: 'Leave', short: 'L', pillClass: 'bg-dark-100 text-dark-600', cellClass: 'bg-dark-400 text-white', dotClass: 'bg-dark-400' },
+  half_day: { label: 'Half Day', short: 'H', pillClass: 'bg-amber-50 text-amber-700', cellClass: 'bg-amber-300 text-amber-950', dotClass: 'bg-amber-400' },
+  holiday: { label: 'Holiday', short: 'O', pillClass: 'bg-sky-50 text-sky-700', cellClass: 'bg-sky-100 text-sky-700', dotClass: 'bg-sky-400' },
+  week_off: { label: 'Week Off', short: '', pillClass: 'bg-white text-dark-500 border border-dark-100', cellClass: 'bg-white text-dark-300', dotClass: 'bg-dark-200' },
+};
+
+function UserAttendanceTab({ user }: { user: UserType }) {
+  const month = workforceReferenceMonth.month;
+  const year = workforceReferenceMonth.year;
+  const data = useMemo(() => getUserMonthlyAttendance(user.id, month, year), [user.id, month, year]);
+  const monthLabel = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1));
+
+  if (!data) {
+    return (
+      <div className="text-center py-10 space-y-3">
+        <Briefcase size={32} className="text-dark-200 mx-auto" />
+        <p className="text-sm text-dark-500">No attendance data available for this user.</p>
+      </div>
+    );
+  }
+
+  const monthDays = Array.from({ length: new Date(year, month, 0).getDate() }, (_, i) => i + 1);
+  const recordMap = new Map(data.records.map(r => [r.date, r]));
+
+  const summary = data.records.reduce<Record<AttendanceStatus, number>>((acc, r) => {
+    acc[r.status] = (acc[r.status] || 0) + 1;
+    return acc;
+  }, { present: 0, absent: 0, leave: 0, half_day: 0, holiday: 0, week_off: 0 });
+
+  return (
+    <div className="space-y-4">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {(['present', 'absent', 'leave', 'half_day'] as AttendanceStatus[]).map(status => (
+          <div key={status} className="rounded-2xl border border-dark-100 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-dark-400">{statusMeta[status].label}</p>
+                <p className="mt-2 text-xl font-bold tracking-tight text-dark-900">{summary[status]}</p>
+              </div>
+              <span className={`inline-flex h-9 min-w-9 items-center justify-center rounded-xl px-2 text-xs font-bold ${statusMeta[status].pillClass}`}>
+                {statusMeta[status].short || 'Off'}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Monthly grid */}
+      <div className="overflow-hidden rounded-2xl border border-dark-100 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-dark-100 bg-dark-50/70 px-5 py-3">
+          <p className="text-sm font-semibold text-dark-900">{monthLabel}</p>
+          <div className="flex items-center gap-3">
+            {Object.entries(statusMeta)
+              .filter(([k]) => k !== 'holiday')
+              .map(([key, meta]) => (
+                <div key={key} className="inline-flex items-center gap-1.5 text-xs text-dark-600">
+                  <span className={`h-2 w-2 rounded-full ${meta.dotClass}`} />
+                  {meta.label}
+                </div>
+              ))}
+          </div>
+        </div>
+        <div className="overflow-x-auto px-5 py-4">
+          <div className="flex gap-1">
+            {monthDays.map(day => {
+              const key = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const record = recordMap.get(key);
+              const status = record?.status ?? 'week_off';
+              const meta = statusMeta[status];
+              const weekDay = new Date(year, month - 1, day).getDay();
+              const weekend = weekDay === 0 || weekDay === 6;
+
+              return (
+                <div key={day} className="flex flex-col items-center gap-1">
+                  <span className="text-[10px] font-medium text-dark-400">{day}</span>
+                  <div
+                    className={`flex h-9 w-9 items-center justify-center rounded-lg text-xs font-bold ${weekend && status === 'week_off' ? 'bg-dark-50 text-dark-300' : meta.cellClass}`}
+                    title={`${meta.label}${record?.hoursWorked ? ` · ${record.hoursWorked.toFixed(1)}h` : ''}`}
+                  >
+                    {meta.short}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

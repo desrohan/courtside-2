@@ -46,6 +46,16 @@ export const getNavigation = (orgId: string): NavSection[] => [
       { title: 'Scheduler', path: `/o/${orgId}/schedule/calendar`, icon: 'calendar', permission: ['View Event'] },
       { title: 'Planner', path: `/o/${orgId}/planner`, icon: 'gantt-chart', permission: ['View Event'] },
       {
+        title: 'Workforce',
+        path: `/o/${orgId}/workforce`,
+        icon: 'briefcase',
+        permission: ['View User'],
+        children: [
+          { title: 'Attendance', path: `/o/${orgId}/workforce/attendance`, permission: ['View User'] },
+          { title: 'Payroll', path: `/o/${orgId}/workforce/payroll`, permission: ['View User'] },
+        ],
+      },
+      {
         title: 'Forms',
         path: `/o/${orgId}/form`,
         icon: 'file-text',
