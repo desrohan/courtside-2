@@ -8,6 +8,7 @@ import {
   Download,
   FileDown,
   Filter,
+  LogIn,
   UserCircle,
   History,
   PenLine,
@@ -21,6 +22,7 @@ import {
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   computePayroll,
+  dailyAttendanceRecords,
   getAttendanceRequests,
   getCompensationHistory,
   getDailyAttendance,
@@ -38,6 +40,7 @@ import { currentUser, type User } from '@/data/users';
 
 type WorkforceTab = 'attendance' | 'payroll';
 type AttendanceView = 'day' | 'month' | 'requests';
+type AttendanceSection = 'overview' | 'my';
 type PayrollView = 'register' | 'compensation' | 'payslips';
 
 const attendanceStatusMeta: Record<AttendanceStatus, { label: string; short: string; pillClass: string; cellClass: string; dotClass: string }> = {
@@ -133,6 +136,7 @@ export default function WorkforceModule() {
   const navigate = useNavigate();
   const location = useLocation();
   const { organizationId = '' } = useParams();
+  const [attendanceSection, setAttendanceSection] = useState<AttendanceSection>('overview');
   const [attendanceView, setAttendanceView] = useState<AttendanceView>('day');
   const [selectedDate, setSelectedDate] = useState(referenceDate);
   const [visibleMonth, setVisibleMonth] = useState(workforceReferenceMonth.month);
@@ -267,6 +271,26 @@ export default function WorkforceModule() {
 
       {activeTab === 'attendance' ? (
         <section className="space-y-3">
+          {/* Attendance section tabs */}
+          <div className="flex gap-1 bg-dark-50 rounded-lg p-0.5 w-fit">
+            {([
+              { key: 'overview' as AttendanceSection, label: 'Attendance overview' },
+              { key: 'my' as AttendanceSection, label: 'My attendance' },
+            ]).map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setAttendanceSection(tab.key)}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  attendanceSection === tab.key ? 'bg-white text-dark-900 shadow-sm' : 'text-dark-500 hover:text-dark-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {attendanceSection === 'overview' && (
+          <>
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               {attendanceView === 'day' && (
@@ -339,12 +363,6 @@ export default function WorkforceModule() {
                 ))}
               </div>
 
-              <button
-                onClick={() => setShowRequestDrawer(true)}
-                className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-court-500 px-3 text-xs font-semibold text-white transition-colors hover:bg-court-600"
-              >
-                <Plus size={12} /> Attendance request
-              </button>
             </div>
           </div>
 
@@ -380,6 +398,8 @@ export default function WorkforceModule() {
                     <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Check-In</th>
                     <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Check-Out</th>
                     <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Hours</th>
+                    <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Event Hrs</th>
+                    <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Total Hrs</th>
                     <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Overtime</th>
                     <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Status</th>
                     <th className="px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-dark-400">Validate</th>
@@ -407,6 +427,8 @@ export default function WorkforceModule() {
                         <td className="px-3 py-2.5 text-xs text-dark-700">{record?.checkIn ?? 'Not clocked'}</td>
                         <td className="px-3 py-2.5 text-xs text-dark-700">{record?.checkOut ?? 'Not clocked'}</td>
                         <td className="px-3 py-2.5 text-xs font-semibold text-dark-900">{record?.hoursWorked ? formatHours(record.hoursWorked) : '0.0h'}</td>
+                        <td className="px-3 py-2.5 text-xs text-dark-600">{record?.eventHours ? formatHours(record.eventHours) : '0.0h'}</td>
+                        <td className="px-3 py-2.5 text-xs font-semibold text-dark-900">{formatHours((record?.hoursWorked ?? 0) + (record?.eventHours ?? 0))}</td>
                         <td className="px-3 py-2.5 text-xs text-dark-600">{record?.overtimeHours ? formatHours(record.overtimeHours) : '0.0h'}</td>
                         <td className="px-3 py-2.5">
                           <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold ${meta.pillClass}`}>
@@ -530,11 +552,16 @@ export default function WorkforceModule() {
             <AttendanceRequestsView requests={attendanceRequestRows} />
           )}
 
-          {/* Attendance Request Drawer */}
-          <AttendanceRequestDrawer
-            open={showRequestDrawer}
-            onClose={() => setShowRequestDrawer(false)}
-          />
+          </>
+          )}
+
+          {attendanceSection === 'my' && (
+            <MyAttendanceView
+              showRequestDrawer={showRequestDrawer}
+              onOpenRequestDrawer={() => setShowRequestDrawer(true)}
+              onCloseRequestDrawer={() => setShowRequestDrawer(false)}
+            />
+          )}
         </section>
       ) : (
         <section className="space-y-3">
@@ -1707,5 +1734,238 @@ function AttendanceRequestDrawer({ open, onClose }: {
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+   My Attendance View
+   ═══════════════════════════════════════════════════════ */
+
+interface LeaveBalance {
+  type: string;
+  used: number;
+  total: number;
+  color: string;
+  bgColor: string;
+}
+
+const leaveBalances: LeaveBalance[] = [
+  { type: 'Sick', used: 2, total: 12, color: 'bg-red-500', bgColor: 'text-red-500' },
+  { type: 'Casual', used: 1, total: 10, color: 'bg-amber-400', bgColor: 'text-amber-500' },
+  { type: 'Annual', used: 5, total: 15, color: 'bg-blue-500', bgColor: 'text-blue-500' },
+];
+
+function MyAttendanceView({ showRequestDrawer, onOpenRequestDrawer, onCloseRequestDrawer }: {
+  showRequestDrawer: boolean;
+  onOpenRequestDrawer: () => void;
+  onCloseRequestDrawer: () => void;
+}) {
+  const [myMonth, setMyMonth] = useState(workforceReferenceMonth.month);
+  const [myYear, setMyYear] = useState(workforceReferenceMonth.year);
+  const [checkedIn, setCheckedIn] = useState(false);
+
+  const myRecords = useMemo(() => {
+    return dailyAttendanceRecords
+      .filter(r => r.userId === currentUser.id && r.date.startsWith(`${myYear}-${String(myMonth).padStart(2, '0')}-`))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [myMonth, myYear]);
+
+  const mySummary = useMemo(() => {
+    let presentDays = 0;
+    let lateDays = 0;
+    let absentDays = 0;
+    let leaveDays = 0;
+    let totalHours = 0;
+    let checkInMinutesSum = 0;
+    let checkInCount = 0;
+
+    for (const record of myRecords) {
+      if (record.status === 'present') presentDays++;
+      if (record.status === 'absent') absentDays++;
+      if (record.status === 'leave') leaveDays++;
+      if (record.status === 'half_day') presentDays++;
+      totalHours += record.hoursWorked ?? 0;
+
+      if (record.checkIn) {
+        const [h, m] = record.checkIn.split(':').map(Number);
+        checkInMinutesSum += h * 60 + m;
+        checkInCount++;
+        if (h * 60 + m > 9 * 60 + 15) lateDays++;
+      }
+    }
+
+    const workingDays = myRecords.filter(r => r.status !== 'week_off' && r.status !== 'holiday').length;
+    const expectedHours = workingDays * 8;
+    const avgCheckInMinutes = checkInCount > 0 ? Math.round(checkInMinutesSum / checkInCount) : 0;
+    const avgH = Math.floor(avgCheckInMinutes / 60);
+    const avgM = avgCheckInMinutes % 60;
+    const avgAmPm = avgH >= 12 ? 'PM' : 'AM';
+    const avgDisplay = `${avgH > 12 ? avgH - 12 : avgH}:${String(avgM).padStart(2, '0')} ${avgAmPm}`;
+
+    return { presentDays, lateDays, absentDays, leaveDays, totalHours: Number(totalHours.toFixed(1)), expectedHours, avgCheckIn: avgDisplay };
+  }, [myRecords]);
+
+  const moveMyMonth = (direction: number) => {
+    const next = new Date(myYear, myMonth - 1 + direction, 1);
+    setMyMonth(next.getMonth() + 1);
+    setMyYear(next.getFullYear());
+  };
+
+  const todayLabel = formatDateLabel(referenceDate, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+
+  return (
+    <div className="space-y-3">
+      {/* Today header with check-in */}
+      <div className="flex items-center justify-between rounded-xl border border-dark-100 bg-white px-4 py-3">
+        <p className="text-sm text-dark-600">Today &mdash; {todayLabel}</p>
+        <button
+          onClick={() => setCheckedIn(!checkedIn)}
+          className={`inline-flex h-9 items-center gap-2 rounded-lg px-5 text-xs font-bold text-white transition-colors ${
+            checkedIn ? 'bg-dark-600 hover:bg-dark-700' : 'bg-emerald-500 hover:bg-emerald-600'
+          }`}
+        >
+          <LogIn size={14} /> {checkedIn ? 'Check Out' : 'Check In'}
+        </button>
+      </div>
+
+      {/* Correction request prompt */}
+      <div className="flex items-center justify-between rounded-xl border border-dark-100 bg-white px-4 py-2.5">
+        <div className="flex items-center gap-2 text-xs text-dark-500">
+          <PenLine size={13} className="text-dark-400" />
+          Forgot to check in? Submit a correction request for approval.
+        </div>
+        <button
+          onClick={onOpenRequestDrawer}
+          className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-dark-200 px-3 text-xs font-semibold text-dark-700 transition-colors hover:bg-dark-50"
+        >
+          <Plus size={11} /> New Request
+        </button>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid gap-2 grid-cols-2 xl:grid-cols-6 lg:grid-cols-3">
+        {[
+          { label: 'Present', value: mySummary.presentDays, unit: 'days', color: 'text-emerald-600' },
+          { label: 'Late', value: mySummary.lateDays, unit: 'days', color: 'text-amber-600' },
+          { label: 'Absent', value: mySummary.absentDays, unit: 'days', color: 'text-red-500' },
+          { label: 'On Leave', value: mySummary.leaveDays, unit: 'days', color: 'text-purple-600' },
+          { label: 'Hours Worked', value: mySummary.totalHours, unit: `/ ${mySummary.expectedHours}h`, color: 'text-blue-600' },
+          { label: 'Avg Check-In', value: mySummary.avgCheckIn, unit: '', color: 'text-dark-900' },
+        ].map(card => (
+          <div key={card.label} className="rounded-xl border border-dark-100 bg-white px-3 py-2.5">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-dark-400">{card.label}</p>
+            <div className="mt-1 flex items-baseline gap-1">
+              <span className={`text-lg font-bold ${card.color}`}>{card.value}</span>
+              {card.unit && <span className="text-[10px] text-dark-400">{card.unit}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Leave Balances */}
+      <div className="rounded-xl border border-dark-100 bg-white px-4 py-3">
+        <h3 className="text-sm font-bold text-dark-900 mb-3">Leave Balances</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {leaveBalances.map(lb => {
+            const remaining = lb.total - lb.used;
+            const pct = (lb.used / lb.total) * 100;
+            return (
+              <div key={lb.type}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-[10px] font-bold uppercase tracking-wider ${lb.bgColor}`}>{lb.type}</span>
+                  <span className="text-[10px] text-dark-400">{lb.used}/{lb.total} used</span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-dark-100">
+                  <div className={`h-1.5 rounded-full ${lb.color}`} style={{ width: `${pct}%` }} />
+                </div>
+                <p className="mt-1 text-xs text-dark-600">{remaining} days remaining</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Attendance History */}
+      <div className="overflow-hidden rounded-xl border border-dark-100 bg-white">
+        <div className="flex items-center justify-between border-b border-dark-100 bg-dark-50/60 px-4 py-2.5">
+          <h3 className="text-sm font-bold text-dark-900">Attendance History</h3>
+          <div className="flex items-center gap-1">
+            <button onClick={() => moveMyMonth(-1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
+              <ChevronLeft size={14} />
+            </button>
+            <span className="min-w-[100px] text-center text-xs font-semibold text-dark-700">{formatMonthLabel(myMonth, myYear)}</span>
+            <button onClick={() => moveMyMonth(1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+
+        <table className="w-full">
+          <thead>
+            <tr className="bg-dark-50/40">
+              <th className="px-4 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Date</th>
+              <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Check In</th>
+              <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Check Out</th>
+              <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Worked</th>
+              <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Event Hours</th>
+              <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Total</th>
+              <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-dark-400">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-dark-100">
+            {myRecords
+              .filter(r => r.status !== 'week_off' && r.status !== 'holiday')
+              .map(record => {
+                const meta = attendanceStatusMeta[record.status];
+                const dateObj = new Date(`${record.date}T00:00:00`);
+                const dateLabel = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(dateObj);
+                const checkInDisplay = record.checkIn
+                  ? (() => {
+                      const [h, m] = record.checkIn.split(':').map(Number);
+                      const ampm = h >= 12 ? 'PM' : 'AM';
+                      return `${String(h > 12 ? h - 12 : h).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+                    })()
+                  : null;
+                const checkOutDisplay = record.checkOut
+                  ? (() => {
+                      const [h, m] = record.checkOut.split(':').map(Number);
+                      const ampm = h >= 12 ? 'PM' : 'AM';
+                      return `${String(h > 12 ? h - 12 : h).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+                    })()
+                  : null;
+                const worked = record.hoursWorked ? `${record.hoursWorked.toFixed(1)}h` : null;
+                const total = record.hoursWorked ? `${record.hoursWorked.toFixed(1)}h` : null;
+
+                return (
+                  <tr key={record.date} className="transition-colors hover:bg-dark-50/30">
+                    <td className="px-4 py-2.5 text-xs font-medium text-dark-900">{dateLabel}</td>
+                    <td className="px-3 py-2.5 text-xs text-dark-700">{checkInDisplay ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-xs text-dark-700">{checkOutDisplay ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-xs font-semibold text-dark-900">{worked ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-xs text-dark-600">—</td>
+                    <td className="px-3 py-2.5 text-xs font-semibold text-dark-900">{total ?? '—'}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={`text-xs font-semibold ${meta.pillClass.includes('emerald') ? 'text-emerald-600' : meta.pillClass.includes('amber') ? 'text-amber-600' : meta.pillClass.includes('indigo') ? 'text-indigo-600' : meta.pillClass.includes('red') ? 'text-red-600' : 'text-dark-600'}`}>
+                        {meta.label}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            {myRecords.filter(r => r.status !== 'week_off' && r.status !== 'holiday').length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-4 py-8 text-center text-xs text-dark-400">No attendance records for this month.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Attendance Request Drawer */}
+      <AttendanceRequestDrawer
+        open={showRequestDrawer}
+        onClose={onCloseRequestDrawer}
+      />
+    </div>
   );
 }
