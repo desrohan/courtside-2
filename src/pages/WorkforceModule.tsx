@@ -247,7 +247,7 @@ export default function WorkforceModule() {
           <p className="text-xs text-dark-400 mt-0.5">Staff attendance rolls up into monthly payroll</p>
         </div>
 
-        <div className="flex gap-1 bg-dark-100/60 rounded-xl p-0.5">
+        {/* <div className="flex gap-1 bg-dark-100/60 rounded-xl p-0.5">
           {([
             { key: 'attendance' as WorkforceTab, label: 'Attendance' },
             { key: 'payroll' as WorkforceTab, label: 'Payroll' },
@@ -262,31 +262,54 @@ export default function WorkforceModule() {
               {tab.label}
             </button>
           ))}
-        </div>
+        </div> */}
       </div>
 
       {activeTab === 'attendance' ? (
         <section className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            {attendanceView !== 'requests' ? (
+          <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 bg-dark-50 rounded-lg p-0.5">
-                <button onClick={() => moveDate(-1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
-                  <ChevronLeft size={14} />
-                </button>
-                <div className="min-w-[180px] px-1.5 text-center">
-                  <p className="text-xs font-semibold text-dark-900">{formatDateLabel(selectedDate, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
-                </div>
-                <button onClick={() => moveDate(1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
-                  <ChevronRight size={14} />
-                </button>
-              </div>
+              {attendanceView === 'day' && (
+                <>
+                  <div className="flex items-center gap-1 bg-dark-50 rounded-lg p-0.5">
+                    <button onClick={() => moveDate(-1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
+                      <ChevronLeft size={14} />
+                    </button>
+                    <div className="min-w-[180px] px-1.5 text-center">
+                      <p className="text-xs font-semibold text-dark-900">{formatDateLabel(selectedDate, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                    </div>
+                    <button onClick={() => moveDate(1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
 
-              <button onClick={() => setSelectedDate(referenceDate)} className="h-7 rounded-lg border border-dark-200 bg-white px-3 text-xs font-semibold text-dark-700 transition-colors hover:border-dark-300 hover:bg-dark-50">
-                Today
-              </button>
+                  <button onClick={() => setSelectedDate(referenceDate)} className="h-7 rounded-lg border border-dark-200 bg-white px-3 text-xs font-semibold text-dark-700 transition-colors hover:border-dark-300 hover:bg-dark-50">
+                    Today
+                  </button>
+                </>
+              )}
+
+              {attendanceView === 'month' && (
+                <>
+                  <div className="flex items-center gap-1 bg-dark-50 rounded-lg p-0.5">
+                    <button onClick={() => moveMonth(-1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
+                      <ChevronLeft size={14} />
+                    </button>
+                    <div className="min-w-[120px] px-1.5 text-center text-xs font-semibold text-dark-900">{formatMonthLabel(visibleMonth, visibleYear)}</div>
+                    <button onClick={() => moveMonth(1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+
+                  <button className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-dark-200 bg-white px-3 text-xs font-semibold text-dark-700 transition-colors hover:border-dark-300 hover:bg-dark-50">
+                    <Filter size={12} /> Filter
+                  </button>
+                  <button className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-dark-800 px-3 text-xs font-semibold text-white transition-colors hover:bg-dark-900">
+                    <Download size={12} /> Export
+                  </button>
+                </>
+              )}
             </div>
-            ) : <div />}
 
             <div className="flex items-center gap-2">
               <div className="flex gap-1 bg-dark-50 rounded-lg p-0.5">
@@ -322,27 +345,6 @@ export default function WorkforceModule() {
               >
                 <Plus size={12} /> Attendance request
               </button>
-
-              {attendanceView === 'month' && (
-                <>
-                  <div className="flex items-center gap-1 bg-dark-50 rounded-lg p-0.5">
-                    <button onClick={() => moveMonth(-1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
-                      <ChevronLeft size={14} />
-                    </button>
-                    <div className="min-w-[120px] px-1.5 text-center text-xs font-semibold text-dark-900">{formatMonthLabel(visibleMonth, visibleYear)}</div>
-                    <button onClick={() => moveMonth(1)} className="flex h-7 w-7 items-center justify-center rounded-md text-dark-500 transition-colors hover:bg-white hover:text-dark-800">
-                      <ChevronRight size={14} />
-                    </button>
-                  </div>
-
-                  <button className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-red-500 px-3 text-xs font-semibold text-white transition-colors hover:bg-red-600">
-                    <Download size={12} /> Export
-                  </button>
-                  <button className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-dark-200 bg-white px-3 text-xs font-semibold text-dark-700 transition-colors hover:border-dark-300 hover:bg-dark-50">
-                    <Filter size={12} /> Filter
-                  </button>
-                </>
-              )}
             </div>
           </div>
 
