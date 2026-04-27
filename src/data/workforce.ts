@@ -12,6 +12,7 @@ export interface DailyAttendance {
   checkIn?: string;
   checkOut?: string;
   hoursWorked?: number;
+  eventHours?: number;
   overtimeHours?: number;
   note?: string;
 }
@@ -25,6 +26,7 @@ export interface MonthlyAttendanceSummary {
   leaveDays: number;
   halfDays: number;
   totalHoursWorked: number;
+  eventHours: number;
   overtimeHours: number;
 }
 
@@ -149,10 +151,11 @@ export function getUserMonthlyAttendance(userId: string, month = workforceRefere
     if (entry.status === 'leave') acc.leaveDays += 1;
     if (entry.status === 'half_day') acc.halfDays += 1;
     acc.totalHoursWorked += entry.hoursWorked ?? 0;
+    acc.eventHours += entry.eventHours ?? 0;
     acc.overtimeHours += entry.overtimeHours ?? 0;
     return acc;
-  }, { userId, month, year, presentDays: 0, absentDays: 0, leaveDays: 0, halfDays: 0, totalHoursWorked: 0, overtimeHours: 0 });
-  return { user, records, summary: { ...summary, totalHoursWorked: Number(summary.totalHoursWorked.toFixed(2)), overtimeHours: Number(summary.overtimeHours.toFixed(2)) } };
+  }, { userId, month, year, presentDays: 0, absentDays: 0, leaveDays: 0, halfDays: 0, totalHoursWorked: 0, eventHours: 0, overtimeHours: 0 });
+  return { user, records, summary: { ...summary, totalHoursWorked: Number(summary.totalHoursWorked.toFixed(2)), eventHours: Number(summary.eventHours.toFixed(2)), overtimeHours: Number(summary.overtimeHours.toFixed(2)) } };
 }
 
 export const workforceReferenceMonth = { month: 4, year: 2026 };
@@ -217,6 +220,9 @@ function buildDayRecord(user: WorkforceUser, year: number, month: number, day: n
   const baseHours = hourlyDefaultsByRole[user.role];
   const halfDayHours = 4.5;
   const overtimeHours = status === 'present' && (day + seed) % 5 === 0 ? 1 + ((day + seed) % 2) * 0.5 : 0;
+  const eventHours = (user.role === 'coach' || user.role === 'medical') && (day + seed) % 3 === 0
+    ? 1.5 + ((day + seed) % 3) * 0.5
+    : (day + seed) % 4 === 0 ? 1 : 0;
   const totalHours = status === 'half_day' ? halfDayHours : baseHours + overtimeHours;
   const endMinutes = baseStartMinutes + Math.round(totalHours * 60);
 
@@ -227,6 +233,7 @@ function buildDayRecord(user: WorkforceUser, year: number, month: number, day: n
     checkIn: `${pad(Math.floor(baseStartMinutes / 60))}:${pad(baseStartMinutes % 60)}`,
     checkOut: `${pad(Math.floor(endMinutes / 60))}:${pad(endMinutes % 60)}`,
     hoursWorked: Number(totalHours.toFixed(2)),
+    eventHours: Number(eventHours.toFixed(2)),
     overtimeHours: Number(overtimeHours.toFixed(2)),
     note: status === 'half_day' ? 'Partial shift recorded' : undefined,
   };
@@ -264,6 +271,7 @@ export function getMonthlyAttendance(month = workforceReferenceMonth.month, year
       if (entry.status === 'leave') accumulator.leaveDays += 1;
       if (entry.status === 'half_day') accumulator.halfDays += 1;
       accumulator.totalHoursWorked += entry.hoursWorked ?? 0;
+      accumulator.eventHours += entry.eventHours ?? 0;
       accumulator.overtimeHours += entry.overtimeHours ?? 0;
       return accumulator;
     }, {
@@ -275,6 +283,7 @@ export function getMonthlyAttendance(month = workforceReferenceMonth.month, year
       leaveDays: 0,
       halfDays: 0,
       totalHoursWorked: 0,
+      eventHours: 0,
       overtimeHours: 0,
     });
 
@@ -285,6 +294,7 @@ export function getMonthlyAttendance(month = workforceReferenceMonth.month, year
       summary: {
         ...summary,
         totalHoursWorked: Number(summary.totalHoursWorked.toFixed(2)),
+        eventHours: Number(summary.eventHours.toFixed(2)),
         overtimeHours: Number(summary.overtimeHours.toFixed(2)),
       },
     };
@@ -300,7 +310,8 @@ export function computePayroll(month = workforceReferenceMonth.month, year = wor
 
       const workingDays = records.filter(entry => entry.status !== 'week_off' && entry.status !== 'holiday').length || 1;
       const daysWorked = summary.presentDays + summary.halfDays * 0.5;
-      const standardHours = Math.max(summary.totalHoursWorked - summary.overtimeHours, 0);
+      const totalHoursWithEvents = summary.totalHoursWorked + summary.eventHours;
+      const standardHours = Math.max(totalHoursWithEvents - summary.overtimeHours, 0);
       const overtimeMultiplier = designation.overtimeMultiplier ?? 1;
 
       let grossPay = 0;
@@ -310,8 +321,9 @@ export function computePayroll(month = workforceReferenceMonth.month, year = wor
       } else {
         const attendanceFactor = daysWorked / workingDays;
         const hourlyEquivalent = designation.rate / (workingDays * 8);
+        const eventHoursPremium = summary.eventHours * hourlyEquivalent;
         const overtimePremium = summary.overtimeHours * hourlyEquivalent * Math.max(overtimeMultiplier - 1, 0.25);
-        grossPay = (designation.rate * attendanceFactor) + overtimePremium;
+        grossPay = (designation.rate * attendanceFactor) + eventHoursPremium + overtimePremium;
       }
 
       const deductions: PayrollDeduction[] = [
